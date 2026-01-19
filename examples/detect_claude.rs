@@ -19,13 +19,14 @@ fn main() -> Result<()> {
 
     for pane in &panes {
         // Case 2: TTY マッチングで検出
-        let is_claude = detector.detect_by_tty(pane, &process_ds)?;
+        let reason = detector.detect_by_tty(pane, &process_ds)?;
 
-        if is_claude {
+        if let Some(reason) = reason {
             claude_count += 1;
             println!("✓ Claude Code detected:");
             println!("  Pane: {} (tab: {})", pane.pane_id, pane.tab_id);
             println!("  Title: {}", pane.title);
+            println!("  Detection: {}", reason.display());
             if let Some(tty) = &pane.tty_name {
                 println!("  TTY: {}", tty);
             }

@@ -1,4 +1,5 @@
 use crate::datasource::{ProcessDataSource, ProcessInfo};
+use crate::detector::DetectionReason;
 use crate::models::Pane;
 use anyhow::Result;
 
@@ -31,12 +32,17 @@ impl ClaudeCodeDetector {
     ///
     /// pane の tty_name と ps の TTY を突合し、プロセス名が allowlist に含まれるかチェック
     /// Phase 2.2: プロセスツリーを使って wrapper 経由起動も検出
-    pub fn detect_by_tty<P: ProcessDataSource>(&self, pane: &Pane, process_ds: &P) -> Result<bool> {
+    /// Phase 2.3: 検出根拠を返すように変更
+    pub fn detect_by_tty<P: ProcessDataSource>(
+        &self,
+        pane: &Pane,
+        process_ds: &P,
+    ) -> Result<Option<DetectionReason>> {
         // 自分自身のペイン (wzcc を実行しているペイン) を除外
         if let Ok(current_pane_id) = std::env::var("WEZTERM_PANE") {
             if let Ok(current_id) = current_pane_id.parse::<u32>() {
                 if pane.pane_id == current_id {
-                    return Ok(false);
+                    return Ok(None);
                 }
             }
         }
@@ -44,7 +50,7 @@ impl ClaudeCodeDetector {
         // pane に tty_name がない場合は Case 2 を使えない
         let pane_tty_short = match pane.tty_short() {
             Some(tty) => tty,
-            None => return Ok(false),
+            None => return Ok(None),
         };
 
         // 全プロセスを取得してツリーを構築
@@ -65,18 +71,22 @@ impl ClaudeCodeDetector {
 
             // プロセス名が allowlist に含まれるかチェック (直接)
             if self.is_claude_process(proc) {
-                return Ok(true);
+                return Ok(Some(DetectionReason::DirectTtyMatch {
+                    process_name: proc.command.clone(),
+                }));
             }
 
             // Phase 2.2: プロセスツリーで親プロセスに claude があるかチェック (wrapper 対応)
             for name in &self.process_names {
                 if tree.has_ancestor(*pid, name) {
-                    return Ok(true);
+                    return Ok(Some(DetectionReason::WrapperDetected {
+                        wrapper_process: proc.command.clone(),
+                    }));
                 }
             }
         }
 
-        Ok(false)
+        Ok(None)
     }
 
     /// プロセスが Claude Code かどうかを判定 (allowlist チェック)
@@ -149,14 +159,14 @@ mod tests {
         let claude_pane = panes.iter().find(|p| p.title.contains("✳"));
 
         if let Some(pane) = claude_pane {
-            let is_claude = detector.detect_by_tty(pane, &process_ds).unwrap();
+            let reason = detector.detect_by_tty(pane, &process_ds).unwrap();
             println!(
-                "Pane {} ({}): detected = {}",
-                pane.pane_id, pane.title, is_claude
+                "Pane {} ({}): reason = {:?}",
+                pane.pane_id, pane.title, reason
             );
 
             // この pane は Claude Code であるはず
-            assert!(is_claude);
+            assert!(reason.is_some());
         }
     }
 }

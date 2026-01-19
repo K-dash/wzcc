@@ -1,6 +1,6 @@
 use crate::cli::WeztermCli;
 use crate::datasource::{PaneDataSource, SystemProcessDataSource, WeztermDataSource};
-use crate::detector::ClaudeCodeDetector;
+use crate::detector::{ClaudeCodeDetector, DetectionReason};
 use crate::models::Pane;
 use anyhow::Result;
 use crossterm::{
@@ -26,6 +26,7 @@ use super::event::{
 pub struct ClaudeSession {
     pub pane: Pane,
     pub detected: bool,
+    pub reason: DetectionReason,
 }
 
 /// TUI アプリケーション
@@ -79,14 +80,14 @@ impl App {
                 }
 
                 // Claude Code 検出を試みる
-                let detected = self.detector.detect_by_tty(&pane, &self.process_ds).ok()?;
+                let reason = self.detector.detect_by_tty(&pane, &self.process_ds).ok()??;
 
                 // 検出されたセッションのみ保持
-                if detected {
-                    Some(ClaudeSession { pane, detected })
-                } else {
-                    None
-                }
+                Some(ClaudeSession {
+                    pane,
+                    detected: true,
+                    reason,
+                })
             })
             .collect();
 
@@ -330,6 +331,16 @@ impl App {
                         Span::raw(tty),
                     ]));
                 }
+
+                // Phase 2.3: 検出根拠を表示
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![
+                    Span::styled("Detection: ", Style::default().add_modifier(Modifier::BOLD)),
+                ]));
+                lines.push(Line::from(vec![Span::styled(
+                    session.reason.display(),
+                    Style::default().fg(Color::Green),
+                )]));
 
                 lines
             } else {
