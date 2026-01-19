@@ -8,6 +8,12 @@ pub struct ClaudeCodeDetector {
     process_names: Vec<String>,
 }
 
+impl Default for ClaudeCodeDetector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ClaudeCodeDetector {
     pub fn new() -> Self {
         Self {
@@ -24,11 +30,8 @@ impl ClaudeCodeDetector {
     /// Case 2: TTY マッチングで Claude Code を検出
     ///
     /// pane の tty_name と ps の TTY を突合し、プロセス名が allowlist に含まれるかチェック
-    pub fn detect_by_tty<P: ProcessDataSource>(
-        &self,
-        pane: &Pane,
-        process_ds: &P,
-    ) -> Result<bool> {
+    /// Phase 2.2: プロセスツリーを使って wrapper 経由起動も検出
+    pub fn detect_by_tty<P: ProcessDataSource>(&self, pane: &Pane, process_ds: &P) -> Result<bool> {
         // 自分自身のペイン (wzcc を実行しているペイン) を除外
         if let Ok(current_pane_id) = std::env::var("WEZTERM_PANE") {
             if let Ok(current_id) = current_pane_id.parse::<u32>() {
@@ -44,11 +47,11 @@ impl ClaudeCodeDetector {
             None => return Ok(false),
         };
 
-        // 全プロセスを取得
-        let processes = process_ds.list_processes()?;
+        // 全プロセスを取得してツリーを構築
+        let tree = process_ds.build_tree()?;
 
         // TTY が一致するプロセスを検索
-        for proc in &processes {
+        for (pid, proc) in tree.processes.iter() {
             // プロセスに TTY がない場合はスキップ
             let proc_tty = match &proc.tty {
                 Some(tty) => tty,
@@ -60,9 +63,16 @@ impl ClaudeCodeDetector {
                 continue;
             }
 
-            // プロセス名が allowlist に含まれるかチェック
-            if self.is_claude_process(&proc) {
+            // プロセス名が allowlist に含まれるかチェック (直接)
+            if self.is_claude_process(proc) {
                 return Ok(true);
+            }
+
+            // Phase 2.2: プロセスツリーで親プロセスに claude があるかチェック (wrapper 対応)
+            for name in &self.process_names {
+                if tree.has_ancestor(*pid, name) {
+                    return Ok(true);
+                }
             }
         }
 
@@ -140,7 +150,10 @@ mod tests {
 
         if let Some(pane) = claude_pane {
             let is_claude = detector.detect_by_tty(pane, &process_ds).unwrap();
-            println!("Pane {} ({}): detected = {}", pane.pane_id, pane.title, is_claude);
+            println!(
+                "Pane {} ({}): detected = {}",
+                pane.pane_id, pane.title, is_claude
+            );
 
             // この pane は Claude Code であるはず
             assert!(is_claude);

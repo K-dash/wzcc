@@ -17,7 +17,9 @@ use ratatui::{
 };
 use std::io;
 
-use super::event::{Event, EventHandler, is_down_key, is_enter_key, is_quit_key, is_refresh_key, is_up_key};
+use super::event::{
+    is_down_key, is_enter_key, is_quit_key, is_refresh_key, is_up_key, Event, EventHandler,
+};
 
 /// Claude Code セッション情報
 #[derive(Debug, Clone)]
@@ -38,6 +40,12 @@ pub struct App {
     detector: ClaudeCodeDetector,
     /// dirty flag (再描画が必要か)
     dirty: bool,
+}
+
+impl Default for App {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl App {
@@ -249,7 +257,9 @@ impl App {
                 let line = Line::from(vec![
                     Span::styled(
                         format!("{} ", icon),
-                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         format!("Pane {}: ", pane.pane_id),
@@ -306,9 +316,10 @@ impl App {
 
                 if let Some(cwd) = pane.cwd_path() {
                     lines.push(Line::from(""));
-                    lines.push(Line::from(vec![
-                        Span::styled("CWD:", Style::default().add_modifier(Modifier::BOLD)),
-                    ]));
+                    lines.push(Line::from(vec![Span::styled(
+                        "CWD:",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    )]));
                     lines.push(Line::from(cwd));
                 }
 
@@ -328,7 +339,8 @@ impl App {
             vec![Line::from("No sessions")]
         };
 
-        let paragraph = Paragraph::new(text).block(Block::default().borders(Borders::ALL).title(" Details "));
+        let paragraph =
+            Paragraph::new(text).block(Block::default().borders(Borders::ALL).title(" Details "));
 
         f.render_widget(paragraph, area);
     }

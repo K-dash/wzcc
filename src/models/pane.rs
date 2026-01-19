@@ -18,16 +18,16 @@ pub struct Pane {
 impl Pane {
     /// CWD から `file://` プレフィックスを除去
     pub fn cwd_path(&self) -> Option<String> {
-        self.cwd.as_ref().and_then(|cwd| {
-            cwd.strip_prefix("file://").map(|s| s.to_string())
-        })
+        self.cwd
+            .as_ref()
+            .and_then(|cwd| cwd.strip_prefix("file://").map(|s| s.to_string()))
     }
 
     /// TTY 名から `/dev/` プレフィックスを除去 (ps aux との突合用)
     pub fn tty_short(&self) -> Option<String> {
-        self.tty_name.as_ref().and_then(|tty| {
-            tty.strip_prefix("/dev/").map(|s| s.to_string())
-        })
+        self.tty_name
+            .as_ref()
+            .and_then(|tty| tty.strip_prefix("/dev/").map(|s| s.to_string()))
     }
 }
 

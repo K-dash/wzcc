@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use std::collections::{HashMap, VecDeque};
 use std::process::Command;
 
 /// プロセス情報
@@ -11,13 +12,96 @@ pub struct ProcessInfo {
     pub args: Option<String>,
 }
 
+/// プロセスツリー
+pub struct ProcessTree {
+    /// 子プロセスのマップ (pid -> [child_pids])
+    pub children: HashMap<u32, Vec<u32>>,
+    /// 全プロセス情報 (pid -> ProcessInfo)
+    pub processes: HashMap<u32, ProcessInfo>,
+}
+
+impl ProcessTree {
+    /// プロセス一覧からツリーを構築
+    pub fn build(processes: Vec<ProcessInfo>) -> Self {
+        let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+        let mut process_map: HashMap<u32, ProcessInfo> = HashMap::new();
+
+        for proc in processes {
+            // 親の children リストに追加
+            children.entry(proc.ppid).or_default().push(proc.pid);
+
+            // プロセス情報を保存
+            process_map.insert(proc.pid, proc);
+        }
+
+        Self {
+            children,
+            processes: process_map,
+        }
+    }
+
+    /// 指定した PID の祖先に target 文字列を含むプロセスがあるかチェック (BFS)
+    pub fn has_ancestor(&self, pid: u32, target: &str) -> bool {
+        let mut visited = std::collections::HashSet::new();
+        let mut queue = VecDeque::new();
+        queue.push_back(pid);
+
+        while let Some(current_pid) = queue.pop_front() {
+            if visited.contains(&current_pid) {
+                continue;
+            }
+            visited.insert(current_pid);
+
+            // 現在のプロセスを取得
+            let Some(proc) = self.processes.get(&current_pid) else {
+                continue;
+            };
+
+            // コマンド名または引数に target が含まれるかチェック
+            if proc.command.to_lowercase().contains(target) {
+                return true;
+            }
+
+            if let Some(args) = &proc.args {
+                if args.to_lowercase().contains(target) {
+                    return true;
+                }
+            }
+
+            // 親プロセスをキューに追加
+            if proc.ppid != 0 {
+                queue.push_back(proc.ppid);
+            }
+        }
+
+        false
+    }
+
+    /// 指定した PID のプロセス情報を取得
+    pub fn get(&self, pid: u32) -> Option<&ProcessInfo> {
+        self.processes.get(&pid)
+    }
+}
+
 /// プロセスデータソースの trait
 pub trait ProcessDataSource {
     fn list_processes(&self) -> Result<Vec<ProcessInfo>>;
+
+    /// プロセスツリーを構築
+    fn build_tree(&self) -> Result<ProcessTree> {
+        let processes = self.list_processes()?;
+        Ok(ProcessTree::build(processes))
+    }
 }
 
 /// システムの ps コマンドからプロセス情報を取得
 pub struct SystemProcessDataSource;
+
+impl Default for SystemProcessDataSource {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl SystemProcessDataSource {
     pub fn new() -> Self {
@@ -45,7 +129,7 @@ impl ProcessDataSource for SystemProcessDataSource {
         // ps -eo pid,ppid,tty,comm,args
         // macOS/Linux 共通の形式
         let output = Command::new("ps")
-            .args(&["-eo", "pid,ppid,tty,comm,args"])
+            .args(["-eo", "pid,ppid,tty,comm,args"])
             .output()
             .context("Failed to execute ps command")?;
 
@@ -111,9 +195,18 @@ mod tests {
 
     #[test]
     fn test_normalize_tty() {
-        assert_eq!(SystemProcessDataSource::normalize_tty("ttys003"), Some("ttys003".to_string()));
-        assert_eq!(SystemProcessDataSource::normalize_tty("/dev/ttys003"), Some("ttys003".to_string()));
-        assert_eq!(SystemProcessDataSource::normalize_tty("pts/0"), Some("pts/0".to_string()));
+        assert_eq!(
+            SystemProcessDataSource::normalize_tty("ttys003"),
+            Some("ttys003".to_string())
+        );
+        assert_eq!(
+            SystemProcessDataSource::normalize_tty("/dev/ttys003"),
+            Some("ttys003".to_string())
+        );
+        assert_eq!(
+            SystemProcessDataSource::normalize_tty("pts/0"),
+            Some("pts/0".to_string())
+        );
         assert_eq!(SystemProcessDataSource::normalize_tty("?"), None);
         assert_eq!(SystemProcessDataSource::normalize_tty(""), None);
     }

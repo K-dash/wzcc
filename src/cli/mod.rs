@@ -8,7 +8,7 @@ impl WeztermCli {
     /// 指定した pane にフォーカスを移動
     pub fn activate_pane(pane_id: u32) -> Result<()> {
         let output = Command::new("wezterm")
-            .args(&["cli", "activate-pane", "--pane-id", &pane_id.to_string()])
+            .args(["cli", "activate-pane", "--pane-id", &pane_id.to_string()])
             .output()
             .context("Failed to execute wezterm cli activate-pane")?;
 
@@ -27,7 +27,7 @@ impl WeztermCli {
     /// 指定した tab にフォーカスを移動
     pub fn activate_tab(tab_id: u32) -> Result<()> {
         let output = Command::new("wezterm")
-            .args(&["cli", "activate-tab", "--tab-id", &tab_id.to_string()])
+            .args(["cli", "activate-tab", "--tab-id", &tab_id.to_string()])
             .output()
             .context("Failed to execute wezterm cli activate-tab")?;
 

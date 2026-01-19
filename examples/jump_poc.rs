@@ -16,10 +16,7 @@ fn main() -> Result<()> {
         let active_marker = if pane.is_active { " (ACTIVE)" } else { "" };
         println!(
             "[{}] Pane {} - {}{}",
-            idx,
-            pane.pane_id,
-            pane.title,
-            active_marker
+            idx, pane.pane_id, pane.title, active_marker
         );
     }
 
@@ -27,7 +24,10 @@ fn main() -> Result<()> {
     let target_pane = panes.iter().find(|p| !p.is_active);
 
     if let Some(pane) = target_pane {
-        println!("\nTest: Jumping to pane {} ({})...", pane.pane_id, pane.title);
+        println!(
+            "\nTest: Jumping to pane {} ({})...",
+            pane.pane_id, pane.title
+        );
 
         // まず tab をアクティベート
         WeztermCli::activate_tab(pane.tab_id)?;
@@ -36,7 +36,10 @@ fn main() -> Result<()> {
         WeztermCli::activate_pane(pane.pane_id)?;
 
         println!("✓ Jump succeeded!");
-        println!("\n実際にペイン {} にジャンプしたか確認してください", pane.pane_id);
+        println!(
+            "\n実際にペイン {} にジャンプしたか確認してください",
+            pane.pane_id
+        );
     } else {
         println!("\nAll panes are active (or only one pane exists)");
     }

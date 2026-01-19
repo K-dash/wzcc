@@ -6,6 +6,12 @@ use std::process::Command;
 /// wezterm CLI からペイン情報を取得するデータソース
 pub struct WeztermDataSource;
 
+impl Default for WeztermDataSource {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WeztermDataSource {
     pub fn new() -> Self {
         Self
@@ -34,7 +40,7 @@ impl WeztermDataSource {
 impl PaneDataSource for WeztermDataSource {
     fn list_panes(&self) -> Result<Vec<Pane>> {
         let output = Command::new("wezterm")
-            .args(&["cli", "list", "--format", "json"])
+            .args(["cli", "list", "--format", "json"])
             .output()
             .context("Failed to execute wezterm cli list")?;
 
