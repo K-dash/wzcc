@@ -3,6 +3,7 @@ use crate::datasource::{PaneDataSource, SystemProcessDataSource, WeztermDataSour
 use crate::detector::{ClaudeCodeDetector, DetectionReason};
 use crate::models::Pane;
 use anyhow::Result;
+use std::time::Duration;
 use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -20,6 +21,7 @@ use std::io;
 use super::event::{
     is_down_key, is_enter_key, is_quit_key, is_refresh_key, is_up_key, Event, EventHandler,
 };
+use super::toast::Toast;
 
 /// Claude Code セッション情報
 #[derive(Debug, Clone)]
@@ -41,6 +43,8 @@ pub struct App {
     detector: ClaudeCodeDetector,
     /// dirty flag (再描画が必要か)
     dirty: bool,
+    /// トースト通知
+    toast: Option<Toast>,
 }
 
 impl Default for App {
@@ -61,6 +65,7 @@ impl App {
             process_ds: SystemProcessDataSource::new(),
             detector: ClaudeCodeDetector::new(),
             dirty: true,
+            toast: None,
         }
     }
 
@@ -146,12 +151,25 @@ impl App {
     }
 
     /// 選択中のセッションにジャンプ
-    pub fn jump_to_selected(&self) -> Result<()> {
+    pub fn jump_to_selected(&mut self) -> Result<()> {
         if let Some(i) = self.list_state.selected() {
             if let Some(session) = self.sessions.get(i) {
-                // Pane をアクティベート (workspace も自動で切り替わるはず)
-                // tab のアクティベートは不要 (pane のアクティベートで自動的に tab も切り替わる)
-                WeztermCli::activate_pane(session.pane.pane_id)?;
+                let pane_id = session.pane.pane_id;
+
+                // Pane をアクティベート
+                match WeztermCli::activate_pane(pane_id) {
+                    Ok(_) => {
+                        // 成功トーストを表示
+                        self.toast = Some(Toast::success(format!("✓ Jumped to pane {}", pane_id)));
+                        self.dirty = true;
+                    }
+                    Err(e) => {
+                        // エラートーストを表示
+                        self.toast = Some(Toast::error(format!("✗ Failed to jump: {}", e)));
+                        self.dirty = true;
+                        return Err(e);
+                    }
+                }
             }
         }
 
@@ -191,9 +209,21 @@ impl App {
                     } else if is_up_key(&key) {
                         self.select_previous();
                     } else if is_enter_key(&key) {
-                        if let Err(e) = self.jump_to_selected() {
-                            // ジャンプ失敗は無視 (ログに残す余地はある)
+                        // ジャンプを試みる
+                        let jump_result = self.jump_to_selected();
+
+                        // トーストを表示するために最後に一度描画
+                        terminal.draw(|f| self.render(f))?;
+
+                        // 500ms 待機してトーストを見せる
+                        std::thread::sleep(Duration::from_millis(500));
+
+                        // ジャンプ失敗時はエラーを表示して続行
+                        if let Err(e) = jump_result {
                             eprintln!("Jump failed: {}", e);
+                            // トーストをクリア
+                            self.toast = None;
+                            self.dirty = true;
                         } else {
                             // ジャンプ成功したら TUI を終了
                             break Ok(());
@@ -206,7 +236,13 @@ impl App {
                     self.dirty = true;
                 }
                 Event::Tick => {
-                    // Tick では何もしない (将来的に自動リフレッシュを入れる場合はここ)
+                    // トーストの期限切れチェック
+                    if let Some(toast) = &self.toast {
+                        if toast.is_expired() {
+                            self.toast = None;
+                            self.dirty = true;
+                        }
+                    }
                 }
             }
         };
@@ -223,11 +259,26 @@ impl App {
     fn render(&mut self, f: &mut ratatui::Frame) {
         let size = f.area();
 
+        // トーストがある場合は画面を分割 (上: メイン、下: トースト)
+        let main_area = if self.toast.is_some() {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(0), Constraint::Length(3)])
+                .split(size);
+
+            // トーストを描画
+            self.render_toast(f, chunks[1]);
+
+            chunks[0]
+        } else {
+            size
+        };
+
         // 2カラムレイアウト (左: リスト 80%, 右: 詳細 20%)
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(80), Constraint::Percentage(20)])
-            .split(size);
+            .split(main_area);
 
         self.render_list(f, chunks[0]);
         self.render_details(f, chunks[1]);
@@ -354,5 +405,29 @@ impl App {
             Paragraph::new(text).block(Block::default().borders(Borders::ALL).title(" Details "));
 
         f.render_widget(paragraph, area);
+    }
+
+    /// トースト描画
+    fn render_toast(&self, f: &mut ratatui::Frame, area: Rect) {
+        if let Some(toast) = &self.toast {
+            use super::toast::ToastType;
+
+            let (color, symbol) = match toast.toast_type {
+                ToastType::Success => (Color::Green, "✓"),
+                ToastType::Error => (Color::Red, "✗"),
+            };
+
+            let text = vec![Line::from(vec![
+                Span::styled(symbol, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                Span::raw(" "),
+                Span::raw(&toast.message),
+            ])];
+
+            let paragraph = Paragraph::new(text)
+                .block(Block::default().borders(Borders::ALL))
+                .style(Style::default().fg(color));
+
+            f.render_widget(paragraph, area);
+        }
     }
 }
