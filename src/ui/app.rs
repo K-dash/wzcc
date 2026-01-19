@@ -3,7 +3,6 @@ use crate::datasource::{PaneDataSource, SystemProcessDataSource, WeztermDataSour
 use crate::detector::{ClaudeCodeDetector, DetectionReason};
 use crate::models::Pane;
 use anyhow::Result;
-use std::time::Duration;
 use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -21,7 +20,6 @@ use std::io;
 use super::event::{
     is_down_key, is_enter_key, is_quit_key, is_refresh_key, is_up_key, Event, EventHandler,
 };
-use super::toast::Toast;
 
 /// Claude Code セッション情報
 #[derive(Debug, Clone)]
@@ -43,8 +41,6 @@ pub struct App {
     detector: ClaudeCodeDetector,
     /// dirty flag (再描画が必要か)
     dirty: bool,
-    /// トースト通知
-    toast: Option<Toast>,
 }
 
 impl Default for App {
@@ -65,7 +61,6 @@ impl App {
             process_ds: SystemProcessDataSource::new(),
             detector: ClaudeCodeDetector::new(),
             dirty: true,
-            toast: None,
         }
     }
 
@@ -157,19 +152,7 @@ impl App {
                 let pane_id = session.pane.pane_id;
 
                 // Pane をアクティベート
-                match WeztermCli::activate_pane(pane_id) {
-                    Ok(_) => {
-                        // 成功トーストを表示
-                        self.toast = Some(Toast::success(format!("✓ Jumped to pane {}", pane_id)));
-                        self.dirty = true;
-                    }
-                    Err(e) => {
-                        // エラートーストを表示
-                        self.toast = Some(Toast::error(format!("✗ Failed to jump: {}", e)));
-                        self.dirty = true;
-                        return Err(e);
-                    }
-                }
+                WeztermCli::activate_pane(pane_id)?;
             }
         }
 
@@ -210,24 +193,11 @@ impl App {
                         self.select_previous();
                     } else if is_enter_key(&key) {
                         // ジャンプを試みる
-                        let jump_result = self.jump_to_selected();
-
-                        // トーストを表示するために最後に一度描画
-                        terminal.draw(|f| self.render(f))?;
-
-                        // 500ms 待機してトーストを見せる
-                        std::thread::sleep(Duration::from_millis(500));
-
-                        // ジャンプ失敗時はエラーを表示して続行
-                        if let Err(e) = jump_result {
+                        if let Err(e) = self.jump_to_selected() {
                             eprintln!("Jump failed: {}", e);
-                            // トーストをクリア
-                            self.toast = None;
-                            self.dirty = true;
-                        } else {
-                            // ジャンプ成功したら TUI を終了
-                            break Ok(());
                         }
+                        // ジャンプしたら TUI を終了
+                        break Ok(());
                     } else if is_refresh_key(&key) {
                         self.refresh()?;
                     }
@@ -236,13 +206,8 @@ impl App {
                     self.dirty = true;
                 }
                 Event::Tick => {
-                    // トーストの期限切れチェック
-                    if let Some(toast) = &self.toast {
-                        if toast.is_expired() {
-                            self.toast = None;
-                            self.dirty = true;
-                        }
-                    }
+                    // TODO: トースト通知の実装 (Phase 4 - 保留中)
+                    // 現在の実装では pane 切り替え後に描画が見えない問題がある
                 }
             }
         };
@@ -259,20 +224,9 @@ impl App {
     fn render(&mut self, f: &mut ratatui::Frame) {
         let size = f.area();
 
-        // トーストがある場合は画面を分割 (上: メイン、下: トースト)
-        let main_area = if self.toast.is_some() {
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Min(0), Constraint::Length(3)])
-                .split(size);
-
-            // トーストを描画
-            self.render_toast(f, chunks[1]);
-
-            chunks[0]
-        } else {
-            size
-        };
+        // TODO: トースト通知は Phase 4 で保留中
+        // pane 切り替え後に描画が見えない問題があるため一旦スキップ
+        let main_area = size;
 
         // 2カラムレイアウト (左: リスト 80%, 右: 詳細 20%)
         let chunks = Layout::default()
@@ -407,7 +361,9 @@ impl App {
         f.render_widget(paragraph, area);
     }
 
-    /// トースト描画
+    // TODO: トースト描画は Phase 4 で保留中
+    // pane 切り替え後に描画が見えない問題があるため一旦スキップ
+    /*
     fn render_toast(&self, f: &mut ratatui::Frame, area: Rect) {
         if let Some(toast) = &self.toast {
             use super::toast::ToastType;
@@ -430,4 +386,5 @@ impl App {
             f.render_widget(paragraph, area);
         }
     }
+    */
 }
