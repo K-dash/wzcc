@@ -71,7 +71,8 @@ mod tests {
 
         // 最初のペインの構造を確認
         let first = &panes[0];
-        assert!(first.pane_id >= 0);
+        // pane_id is u64, so just check it exists (always >= 0)
+        let _ = first.pane_id;
         assert!(!first.title.is_empty());
     }
 }

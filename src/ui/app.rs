@@ -1,8 +1,13 @@
 use crate::cli::WeztermCli;
-use crate::datasource::{PaneDataSource, ProcessDataSource, SystemProcessDataSource, WeztermDataSource};
+use crate::datasource::{
+    PaneDataSource, ProcessDataSource, SystemProcessDataSource, WeztermDataSource,
+};
 use crate::detector::{ClaudeCodeDetector, DetectionReason};
 use crate::models::Pane;
-use crate::transcript::{get_transcript_dir, get_latest_transcript, detect_session_status, SessionStatus, get_last_assistant_text, get_last_user_prompt};
+use crate::transcript::{
+    detect_session_status, get_last_assistant_text, get_last_user_prompt, get_latest_transcript,
+    get_transcript_dir, SessionStatus,
+};
 use anyhow::Result;
 use crossterm::{
     event::KeyCode,
@@ -113,7 +118,10 @@ impl App {
                 }
 
                 // Claude Code 検出を試みる（プロセスツリーを再利用）
-                let reason = self.detector.detect_by_tty_with_tree(&pane, &process_tree).ok()??;
+                let reason = self
+                    .detector
+                    .detect_by_tty_with_tree(&pane, &process_tree)
+                    .ok()??;
 
                 // セッション状態を取得
                 let (status, last_prompt, last_output) =
@@ -137,7 +145,8 @@ impl App {
 
         // 同じ cwd で複数セッションがある場合は last_output を表示できない
         // cwd ごとのセッション数をカウント
-        let mut cwd_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut cwd_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         for session in &self.sessions {
             if let Some(cwd) = session.pane.cwd_path() {
                 *cwd_counts.entry(cwd).or_insert(0) += 1;
@@ -201,7 +210,9 @@ impl App {
         let last_prompt = get_last_user_prompt(&transcript_path, 200).ok().flatten();
 
         // Get last assistant text (max 1000 chars)
-        let last_output = get_last_assistant_text(&transcript_path, 1000).ok().flatten();
+        let last_output = get_last_assistant_text(&transcript_path, 1000)
+            .ok()
+            .flatten();
 
         (status, last_prompt, last_output)
     }
@@ -423,15 +434,19 @@ impl App {
         ];
 
         // cwd ごとのセッション数とグループ色をマッピング
-        let mut cwd_info: std::collections::HashMap<String, (usize, Color)> = std::collections::HashMap::new();
+        let mut cwd_info: std::collections::HashMap<String, (usize, Color)> =
+            std::collections::HashMap::new();
         let mut color_index = 0;
         for session in &self.sessions {
             if let Some(cwd) = session.pane.cwd_path() {
-                cwd_info.entry(cwd).or_insert_with(|| {
-                    let color = GROUP_COLORS[color_index % GROUP_COLORS.len()];
-                    color_index += 1;
-                    (0, color)
-                }).0 += 1;
+                cwd_info
+                    .entry(cwd)
+                    .or_insert_with(|| {
+                        let color = GROUP_COLORS[color_index % GROUP_COLORS.len()];
+                        color_index += 1;
+                        (0, color)
+                    })
+                    .0 += 1;
             }
         }
 
@@ -458,12 +473,12 @@ impl App {
                         .and_then(|n| n.to_str())
                         .unwrap_or(&cwd);
 
-                    let header_line = Line::from(vec![
-                        Span::styled(
-                            format!("┌─ {} ({} sessions) ", dir_name, count),
-                            Style::default().fg(group_color).add_modifier(Modifier::BOLD),
-                        ),
-                    ]);
+                    let header_line = Line::from(vec![Span::styled(
+                        format!("┌─ {} ({} sessions) ", dir_name, count),
+                        Style::default()
+                            .fg(group_color)
+                            .add_modifier(Modifier::BOLD),
+                    )]);
                     items.push(ListItem::new(header_line));
                     session_indices.push(usize::MAX); // ヘッダーはセッションじゃない
                 }
@@ -511,9 +526,10 @@ impl App {
         }
 
         // list_state のインデックスを ListItem のインデックスに変換
-        let list_index = self.list_state.selected().and_then(|session_idx| {
-            session_indices.iter().position(|&idx| idx == session_idx)
-        });
+        let list_index = self
+            .list_state
+            .selected()
+            .and_then(|session_idx| session_indices.iter().position(|&idx| idx == session_idx));
 
         let mut list_state = ListState::default();
         list_state.select(list_index);
@@ -526,11 +542,7 @@ impl App {
         };
 
         let list = List::new(items)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(title),
-            )
+            .block(Block::default().borders(Borders::ALL).title(title))
             .highlight_style(
                 Style::default()
                     .bg(Color::DarkGray)
@@ -547,12 +559,10 @@ impl App {
             if let Some(session) = self.sessions.get(i) {
                 let pane = &session.pane;
 
-                let mut lines = vec![
-                    Line::from(vec![
-                        Span::styled("Pane: ", Style::default().add_modifier(Modifier::BOLD)),
-                        Span::raw(pane.pane_id.to_string()),
-                    ]),
-                ];
+                let mut lines = vec![Line::from(vec![
+                    Span::styled("Pane: ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(pane.pane_id.to_string()),
+                ])];
 
                 if let Some(cwd) = pane.cwd_path() {
                     lines.push(Line::from(""));
@@ -582,7 +592,10 @@ impl App {
                         } else {
                             format!("Approval ({})", tools.join(", "))
                         };
-                        (Color::Magenta, Box::leak(tools_str.into_boxed_str()) as &str)
+                        (
+                            Color::Magenta,
+                            Box::leak(tools_str.into_boxed_str()) as &str,
+                        )
                     }
                     SessionStatus::Unknown => (Color::DarkGray, "Unknown"),
                 };

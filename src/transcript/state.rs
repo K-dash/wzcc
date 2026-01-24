@@ -183,9 +183,6 @@ mod tests {
     fn test_session_status_icon() {
         assert_eq!(SessionStatus::Processing.icon(), "●");
         assert_eq!(SessionStatus::Idle.icon(), "○");
-        assert_eq!(
-            SessionStatus::WaitingForUser { tools: vec![] }.icon(),
-            "◐"
-        );
+        assert_eq!(SessionStatus::WaitingForUser { tools: vec![] }.icon(), "◐");
     }
 }

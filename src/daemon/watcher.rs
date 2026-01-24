@@ -4,7 +4,9 @@ use crate::cli::WeztermCli;
 use crate::datasource::{PaneDataSource, SystemProcessDataSource, WeztermDataSource};
 use crate::detector::ClaudeCodeDetector;
 use crate::models::Pane;
-use crate::transcript::{detect_session_status, get_latest_transcript, get_transcript_dir, SessionStatus};
+use crate::transcript::{
+    detect_session_status, get_latest_transcript, get_transcript_dir, SessionStatus,
+};
 use anyhow::Result;
 use std::collections::HashMap;
 use tokio::time::{interval, Duration};

@@ -14,7 +14,13 @@ use std::path::PathBuf;
 /// ```
 pub fn encode_cwd(cwd: &str) -> String {
     cwd.chars()
-        .map(|c| if c == '/' || c == '.' || c == '_' { '-' } else { c })
+        .map(|c| {
+            if c == '/' || c == '.' || c == '_' {
+                '-'
+            } else {
+                c
+            }
+        })
         .collect()
 }
 

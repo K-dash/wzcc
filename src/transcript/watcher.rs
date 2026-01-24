@@ -5,7 +5,7 @@ use super::state::{detect_session_status, DetectionConfig, SessionStatus};
 use anyhow::Result;
 use notify::{Config, Event, RecommendedWatcher, Watcher};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, RwLock};
 
@@ -128,9 +128,7 @@ impl TranscriptWatcher {
             // Extract cwd from path
             if let Some(cwd) = Self::extract_cwd_from_path(path) {
                 // Detect new status
-                if let Ok(status) =
-                    super::state::detect_session_status_with_config(path, config)
-                {
+                if let Ok(status) = super::state::detect_session_status_with_config(path, config) {
                     // Check if status changed
                     let status_changed = {
                         let cache_read = cache.read().unwrap();
@@ -157,7 +155,7 @@ impl TranscriptWatcher {
     }
 
     /// Extract the original cwd from an encoded transcript path.
-    fn extract_cwd_from_path(path: &PathBuf) -> Option<String> {
+    fn extract_cwd_from_path(path: &Path) -> Option<String> {
         // Path format: ~/.claude/projects/{encoded-cwd}/{session_id}.jsonl
         let parent = path.parent()?;
         let encoded_cwd = parent.file_name()?.to_str()?;
@@ -238,9 +236,8 @@ mod tests {
 
     #[test]
     fn test_extract_cwd_from_path() {
-        let path = PathBuf::from(
-            "/Users/test/.claude/projects/-Users-test-hobby-wzcc/abc123.jsonl",
-        );
+        let path =
+            PathBuf::from("/Users/test/.claude/projects/-Users-test-hobby-wzcc/abc123.jsonl");
         let cwd = TranscriptWatcher::extract_cwd_from_path(&path);
         assert_eq!(cwd, Some("/Users/test/hobby/wzcc".to_string()));
     }

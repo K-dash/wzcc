@@ -43,7 +43,5 @@ fn run_daemon() -> Result<()> {
     // 3. ステータス変化時にタブ名を変更
 
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(async {
-        wzcc::daemon::run().await
-    })
+    rt.block_on(async { wzcc::daemon::run().await })
 }
