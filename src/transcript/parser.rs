@@ -1,10 +1,18 @@
 //! JSONL transcript file parser.
 
 use anyhow::Result;
+use regex::Regex;
 use serde::Deserialize;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::Path;
+
+/// Remove <system-reminder>...</system-reminder> tags from text.
+fn remove_system_reminders(text: &str) -> String {
+    // Use regex to remove system-reminder tags and their content
+    let re = Regex::new(r"<system-reminder>[\s\S]*?</system-reminder>").unwrap();
+    re.replace_all(text, "").trim().to_string()
+}
 
 /// A content block within a message.
 #[derive(Debug, Clone, Deserialize)]
@@ -166,6 +174,144 @@ pub fn read_last_entries(path: &Path, count: usize) -> Result<Vec<TranscriptEntr
 pub fn read_last_entry(path: &Path) -> Result<Option<TranscriptEntry>> {
     let entries = read_last_entries(path, 1)?;
     Ok(entries.into_iter().next())
+}
+
+/// A user message structure (content can be string or array).
+#[derive(Debug, Clone, Deserialize)]
+pub struct UserMessage {
+    #[serde(default)]
+    pub content: UserContent,
+}
+
+/// User content can be a string or an array of content blocks.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(untagged)]
+pub enum UserContent {
+    #[default]
+    Empty,
+    Text(String),
+    Blocks(Vec<ContentBlock>),
+}
+
+/// A user transcript entry.
+#[derive(Debug, Clone, Deserialize)]
+pub struct UserTranscriptEntry {
+    #[serde(rename = "type")]
+    pub type_: String,
+    #[serde(rename = "isMeta")]
+    pub is_meta: Option<bool>,
+    pub message: Option<UserMessage>,
+}
+
+/// Get the last user prompt from a transcript file.
+/// Returns the text content (up to max_chars) from the most recent user message.
+pub fn get_last_user_prompt(path: &Path, max_chars: usize) -> Result<Option<String>> {
+    let file = std::fs::File::open(path)?;
+    let metadata = file.metadata()?;
+    let file_size = metadata.len();
+
+    if file_size == 0 {
+        return Ok(None);
+    }
+
+    // Read lines from the file
+    let mut reader = std::io::BufReader::new(file);
+    let mut lines = Vec::new();
+
+    if file_size < 1024 * 1024 {
+        use std::io::BufRead;
+        for line in reader.lines() {
+            let line = line?;
+            if !line.trim().is_empty() {
+                lines.push(line);
+            }
+        }
+    } else {
+        use std::io::{BufRead, Seek, SeekFrom};
+        let seek_pos = file_size.saturating_sub(30 * 100 * 1024);
+        reader.seek(SeekFrom::Start(seek_pos))?;
+        if seek_pos > 0 {
+            let mut _skip = String::new();
+            reader.read_line(&mut _skip)?;
+        }
+        for line in reader.lines() {
+            let line = line?;
+            if !line.trim().is_empty() {
+                lines.push(line);
+            }
+        }
+    }
+
+    // Search from the end for a user message with text content (not tool_result, not isMeta)
+    // Need to search more entries since many are tool_results
+    for line in lines.iter().rev().take(200) {
+        let entry: UserTranscriptEntry = match serde_json::from_str(line) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        if entry.type_ != "user" {
+            continue;
+        }
+
+        // Skip meta messages (like local-command-caveat)
+        if entry.is_meta == Some(true) {
+            continue;
+        }
+
+        let Some(msg) = &entry.message else {
+            continue;
+        };
+
+        let text = match &msg.content {
+            UserContent::Text(s) => {
+                // Skip if it's only tool_result content
+                if s.contains("tool_result") && !s.contains('\n') {
+                    continue;
+                }
+                // Remove <system-reminder> tags and their content
+                let cleaned = remove_system_reminders(s);
+                if cleaned.trim().is_empty() {
+                    continue;
+                }
+                cleaned
+            }
+            UserContent::Blocks(blocks) => {
+                // Check if any block is a tool_result
+                if blocks.iter().any(|b| b.type_ == "tool_result") {
+                    continue;
+                }
+                // Collect text blocks and remove system reminders
+                let raw_text = blocks
+                    .iter()
+                    .filter(|b| b.type_ == "text")
+                    .filter_map(|b| b.text.as_ref())
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let cleaned = remove_system_reminders(&raw_text);
+                if cleaned.trim().is_empty() {
+                    continue;
+                }
+                cleaned
+            }
+            UserContent::Empty => continue,
+        };
+
+        if !text.is_empty() {
+            // Truncate to max_chars
+            let truncated = if text.chars().count() > max_chars {
+                let mut s: String = text.chars().take(max_chars).collect();
+                s.push_str("...");
+                s
+            } else {
+                text
+            };
+            return Ok(Some(truncated));
+        }
+    }
+
+    Ok(None)
 }
 
 /// Get the last assistant text output from a transcript file.

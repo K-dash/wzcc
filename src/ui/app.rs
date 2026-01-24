@@ -2,7 +2,7 @@ use crate::cli::WeztermCli;
 use crate::datasource::{PaneDataSource, ProcessDataSource, SystemProcessDataSource, WeztermDataSource};
 use crate::detector::{ClaudeCodeDetector, DetectionReason};
 use crate::models::Pane;
-use crate::transcript::{get_transcript_dir, get_latest_transcript, detect_session_status, SessionStatus, get_last_assistant_text};
+use crate::transcript::{get_transcript_dir, get_latest_transcript, detect_session_status, SessionStatus, get_last_assistant_text, get_last_user_prompt};
 use anyhow::Result;
 use crossterm::{
     event::KeyCode,
@@ -34,6 +34,8 @@ pub struct ClaudeSession {
     pub status: SessionStatus,
     /// Git branch name
     pub git_branch: Option<String>,
+    /// Last user prompt (from transcript)
+    pub last_prompt: Option<String>,
     /// Last assistant output text (from transcript)
     pub last_output: Option<String>,
 }
@@ -114,7 +116,8 @@ impl App {
                 let reason = self.detector.detect_by_tty_with_tree(&pane, &process_tree).ok()??;
 
                 // セッション状態を取得
-                let (status, last_output) = Self::detect_status_and_output_for_pane(&pane);
+                let (status, last_prompt, last_output) =
+                    Self::detect_status_and_output_for_pane(&pane);
 
                 // Git branch を取得
                 let git_branch = pane.cwd_path().and_then(|cwd| Self::get_git_branch(&cwd));
@@ -126,6 +129,7 @@ impl App {
                     reason,
                     status,
                     git_branch,
+                    last_prompt,
                     last_output,
                 })
             })
@@ -140,10 +144,11 @@ impl App {
             }
         }
 
-        // 重複している cwd のセッションは last_output をクリア
+        // 重複している cwd のセッションは last_prompt/last_output をクリア
         for session in &mut self.sessions {
             if let Some(cwd) = session.pane.cwd_path() {
                 if cwd_counts.get(&cwd).copied().unwrap_or(0) > 1 {
+                    session.last_prompt = None;
                     session.last_output = Some("Multiple sessions share this CWD 😢".to_string());
                 }
             }
@@ -171,29 +176,34 @@ impl App {
         Ok(())
     }
 
-    /// Pane の cwd からトランスクリプトを読んで状態と最終出力を検出
-    fn detect_status_and_output_for_pane(pane: &Pane) -> (SessionStatus, Option<String>) {
+    /// Pane の cwd からトランスクリプトを読んで状態、最終プロンプト、最終出力を検出
+    fn detect_status_and_output_for_pane(
+        pane: &Pane,
+    ) -> (SessionStatus, Option<String>, Option<String>) {
         let cwd = match pane.cwd_path() {
             Some(cwd) => cwd,
-            None => return (SessionStatus::Unknown, None),
+            None => return (SessionStatus::Unknown, None, None),
         };
 
         let dir = match get_transcript_dir(&cwd) {
             Some(dir) => dir,
-            None => return (SessionStatus::Unknown, None),
+            None => return (SessionStatus::Unknown, None, None),
         };
 
         let transcript_path = match get_latest_transcript(&dir) {
             Ok(Some(path)) => path,
-            _ => return (SessionStatus::Unknown, None),
+            _ => return (SessionStatus::Unknown, None, None),
         };
 
         let status = detect_session_status(&transcript_path).unwrap_or(SessionStatus::Unknown);
 
+        // Get last user prompt (max 200 chars)
+        let last_prompt = get_last_user_prompt(&transcript_path, 200).ok().flatten();
+
         // Get last assistant text (max 1000 chars)
         let last_output = get_last_assistant_text(&transcript_path, 1000).ok().flatten();
 
-        (status, last_output)
+        (status, last_prompt, last_output)
     }
 
     /// cwd から git branch を取得
@@ -590,30 +600,62 @@ impl App {
                     ]));
                 }
 
-                // Last output プレビューを表示
-                // 固定部分: Pane(2) + CWD(3) + TTY(2) + Status(2) + Branch(2) + 区切り(3) + ボーダー(2) = 約16行
-                let fixed_lines: u16 = 16;
+                // Last prompt と Last output プレビューを表示
+                // 固定部分: Pane(2) + CWD(3) + TTY(2) + Status(2) + Branch(2) + 区切り(3) + Prompt(3) + ボーダー(2) = 約19行
+                let fixed_lines: u16 = 19;
                 let available_for_preview = area.height.saturating_sub(fixed_lines) as usize;
+                let inner_width = (area.width.saturating_sub(2)) as usize;
 
                 // 最低3行ないと表示しない
                 if available_for_preview >= 3 {
-                    if let Some(output) = &session.last_output {
-                        // 区切り線
-                        lines.push(Line::from(""));
+                    // 区切り線
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(vec![Span::styled(
+                        "─".repeat(inner_width),
+                        Style::default().fg(Color::DarkGray),
+                    )]));
+
+                    // Last prompt を表示（1-2行）
+                    if let Some(prompt) = &session.last_prompt {
                         lines.push(Line::from(vec![Span::styled(
-                            "─".repeat((area.width.saturating_sub(2)) as usize),
-                            Style::default().fg(Color::DarkGray),
-                        )]));
-                        lines.push(Line::from(vec![Span::styled(
-                            "Last output:",
+                            "💬 Last prompt:",
                             Style::default().add_modifier(Modifier::BOLD),
                         )]));
-                        lines.push(Line::from(""));
+                        // プロンプトは1-2行で truncate
+                        let prompt_chars: Vec<char> = prompt.chars().collect();
+                        let max_prompt_len = inner_width * 2;
+                        let truncated: String = if prompt_chars.len() > max_prompt_len {
+                            prompt_chars[..max_prompt_len].iter().collect::<String>() + "..."
+                        } else {
+                            prompt_chars.iter().collect()
+                        };
+                        for line in truncated.lines().take(2) {
+                            lines.push(Line::from(Span::styled(
+                                line.to_string(),
+                                Style::default().fg(Color::Cyan),
+                            )));
+                        }
+                    }
+
+                    // Last output を表示
+                    if let Some(output) = &session.last_output {
+                        // prompt と output の間に区切り線
+                        if session.last_prompt.is_some() {
+                            lines.push(Line::from(""));
+                            lines.push(Line::from(vec![Span::styled(
+                                "─".repeat(inner_width),
+                                Style::default().fg(Color::DarkGray),
+                            )]));
+                        }
+
+                        lines.push(Line::from(vec![Span::styled(
+                            "🤖 Last output:",
+                            Style::default().add_modifier(Modifier::BOLD),
+                        )]));
 
                         // テキストを行数に合わせて表示
                         // 各行の幅を考慮して改行
-                        let inner_width = (area.width.saturating_sub(2)) as usize;
-                        let preview_lines = available_for_preview.saturating_sub(4); // 区切り等で4行使う
+                        let preview_lines = available_for_preview.saturating_sub(8); // 区切り + prompt + output label で約8行使う
 
                         let mut output_lines: Vec<Line> = Vec::new();
                         for line in output.lines() {
