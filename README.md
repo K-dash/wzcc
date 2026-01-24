@@ -158,45 +158,39 @@ wzcc --version
 
 ### Data Flow
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    User Input (TUI)                     │
-│              (keyboard, mouse events)                   │
-└──────────────────────┬──────────────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────────────┐
-│                  Session Detection                      │
-│  - Fetch panes from WezTerm CLI                        │
-│  - Build process tree from ps output                   │
-│  - Match pane TTY → process TTY                        │
-│  - Check process allowlist                            │
-│  - Detect wrapper-launched processes                  │
-└──────────────────────┬──────────────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────────────┐
-│              Session Information Enrichment             │
-│  - Extract git branch from CWD                         │
-│  - Parse Claude Code transcript files                  │
-│  - Determine session status                           │
-│  - Extract last user prompt & response                │
-└──────────────────────┬──────────────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────────────┐
-│                   TUI Rendering                         │
-│  - Render session list with status indicators          │
-│  - Display selected session details                    │
-│  - Reactive rendering on state change                 │
-└──────────────────────┬──────────────────────────────────┘
-                       │
-                       ▼
-┌─────────────────────────────────────────────────────────┐
-│              Action Execution (Jump)                    │
-│  - Call wezterm CLI to activate pane                  │
-│  - Continue running TUI (user must press c/q to exit) │
-└─────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    A[User Input] -->|keyboard/mouse events| B[Session Detection]
+
+    B --> C[Session Information Enrichment]
+
+    C --> D[TUI Rendering]
+
+    D -->|Enter key| E[Action Execution]
+    D -->|j/k/↑/↓| D
+
+    E -->|activate pane| F[WezTerm Pane]
+    E -->|TUI continues| D
+
+    subgraph B[Session Detection]
+        B1[Fetch panes from WezTerm CLI]
+        B2[Build process tree from ps]
+        B3[Match pane TTY → process TTY]
+        B4[Check allowlist & wrapper detection]
+    end
+
+    subgraph C[Session Information Enrichment]
+        C1[Extract git branch from CWD]
+        C2[Parse transcript files]
+        C3[Determine session status]
+        C4[Extract last prompt & response]
+    end
+
+    subgraph D[TUI Rendering]
+        D1[Render session list with status]
+        D2[Display selected session details]
+        D3[Reactive rendering on state change]
+    end
 ```
 
 ### Component Breakdown
