@@ -28,6 +28,49 @@ use super::event::{
     is_down_key, is_enter_key, is_quit_key, is_refresh_key, is_up_key, Event, EventHandler,
 };
 
+/// Get display color and text for a SessionStatus.
+fn status_display(status: &SessionStatus) -> (Color, String) {
+    match status {
+        SessionStatus::Ready => (Color::Cyan, "Ready".to_string()),
+        SessionStatus::Processing => (Color::Yellow, "Processing".to_string()),
+        SessionStatus::Idle => (Color::Green, "Idle".to_string()),
+        SessionStatus::WaitingForUser { tools } => {
+            let text = if tools.is_empty() {
+                "Approval".to_string()
+            } else {
+                format!("Approval ({})", tools.join(", "))
+            };
+            (Color::Magenta, text)
+        }
+        SessionStatus::Unknown => (Color::DarkGray, "Unknown".to_string()),
+    }
+}
+
+/// Wrap text into lines with a given width.
+fn wrap_text_lines(text: &str, width: usize, max_lines: usize, color: Color) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    for line in text.lines() {
+        if line.is_empty() {
+            lines.push(Line::from(""));
+        } else {
+            let chars: Vec<char> = line.chars().collect();
+            for chunk in chars.chunks(width.max(1)) {
+                lines.push(Line::from(Span::styled(
+                    chunk.iter().collect::<String>(),
+                    Style::default().fg(color),
+                )));
+                if lines.len() >= max_lines {
+                    return lines;
+                }
+            }
+        }
+        if lines.len() >= max_lines {
+            break;
+        }
+    }
+    lines
+}
+
 /// Claude Code セッション情報
 #[derive(Debug, Clone)]
 pub struct ClaudeSession {
@@ -655,23 +698,7 @@ impl App {
 
                 // Phase 3: セッション状態を表示
                 lines.push(Line::from(""));
-                let (status_color, status_text) = match &session.status {
-                    SessionStatus::Ready => (Color::Cyan, "Ready"),
-                    SessionStatus::Processing => (Color::Yellow, "Processing"),
-                    SessionStatus::Idle => (Color::Green, "Idle"),
-                    SessionStatus::WaitingForUser { tools } => {
-                        let tools_str = if tools.is_empty() {
-                            "Approval".to_string()
-                        } else {
-                            format!("Approval ({})", tools.join(", "))
-                        };
-                        (
-                            Color::Magenta,
-                            Box::leak(tools_str.into_boxed_str()) as &str,
-                        )
-                    }
-                    SessionStatus::Unknown => (Color::DarkGray, "Unknown"),
-                };
+                let (status_color, status_text) = status_display(&session.status);
                 lines.push(Line::from(vec![
                     Span::styled("Status: ", Style::default().add_modifier(Modifier::BOLD)),
                     Span::styled(status_text, Style::default().fg(status_color)),
@@ -739,32 +766,9 @@ impl App {
                             Style::default().add_modifier(Modifier::BOLD),
                         )]));
 
-                        // テキストを行数に合わせて表示
-                        // 各行の幅を考慮して改行
-                        let preview_lines = available_for_preview.saturating_sub(8); // 区切り + prompt + output label で約8行使う
-
-                        let mut output_lines: Vec<Line> = Vec::new();
-                        for line in output.lines() {
-                            // 長い行は折り返す
-                            if line.is_empty() {
-                                output_lines.push(Line::from(""));
-                            } else {
-                                let chars: Vec<char> = line.chars().collect();
-                                for chunk in chars.chunks(inner_width.max(1)) {
-                                    output_lines.push(Line::from(Span::styled(
-                                        chunk.iter().collect::<String>(),
-                                        Style::default().fg(Color::Gray),
-                                    )));
-                                    if output_lines.len() >= preview_lines {
-                                        break;
-                                    }
-                                }
-                            }
-                            if output_lines.len() >= preview_lines {
-                                break;
-                            }
-                        }
-
+                        // 区切り + prompt + output label で約8行使う
+                        let preview_lines = available_for_preview.saturating_sub(8);
+                        let output_lines = wrap_text_lines(output, inner_width, preview_lines, Color::Gray);
                         lines.extend(output_lines);
                     }
                 }

@@ -1,9 +1,33 @@
 //! Session status detection from transcript entries.
 
-use super::parser::read_last_entries;
+use super::parser::{read_last_entries, TranscriptEntry};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use std::path::Path;
+
+/// Check if an entry is an internal/system entry that doesn't indicate real activity.
+fn is_internal_entry(entry: &TranscriptEntry) -> bool {
+    entry.type_ == "file-history-snapshot"
+        || entry.type_ == "queue-operation"
+        || entry.is_hook_progress()
+}
+
+/// Check if a tool_use entry has timed out and should be considered as WaitingForUser.
+/// Returns Some(SessionStatus) if status can be determined, None otherwise.
+fn check_tool_use_status(entry: &TranscriptEntry, config: &DetectionConfig) -> SessionStatus {
+    let tools = entry.get_tool_names();
+
+    if let Some(timestamp) = &entry.timestamp {
+        if let Ok(entry_time) = DateTime::parse_from_rfc3339(timestamp) {
+            let elapsed = Utc::now().signed_duration_since(entry_time.with_timezone(&Utc));
+            if elapsed.num_seconds() > config.waiting_timeout_secs as i64 {
+                return SessionStatus::WaitingForUser { tools };
+            }
+        }
+    }
+
+    SessionStatus::Processing
+}
 
 /// The detected status of a Claude Code session.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,18 +116,10 @@ pub fn detect_session_status_with_config(
 
     // For system entries (other than stop_hook_summary/turn_duration), internal entries
     // like file-history-snapshot, queue-operation, or hook_progress, look at previous entries
-    if last.type_ == "system"
-        || last.type_ == "file-history-snapshot"
-        || last.type_ == "queue-operation"
-        || last.is_hook_progress()
-    {
+    if last.type_ == "system" || is_internal_entry(last) {
         // Find the last meaningful entry (assistant or user)
         for entry in entries.iter().rev().skip(1) {
-            // Skip internal entries that don't indicate real activity
-            if entry.type_ == "file-history-snapshot"
-                || entry.type_ == "queue-operation"
-                || entry.is_hook_progress()
-            {
+            if is_internal_entry(entry) {
                 continue;
             }
 
@@ -114,24 +130,9 @@ pub fn detect_session_status_with_config(
                 return Ok(SessionStatus::Idle);
             }
             if entry.is_tool_use() {
-                // Check time for WaitingForUser
-                if let Some(timestamp) = &entry.timestamp {
-                    if let Ok(entry_time) = DateTime::parse_from_rfc3339(timestamp) {
-                        let now = Utc::now();
-                        let elapsed = now.signed_duration_since(entry_time.with_timezone(&Utc));
-                        if elapsed.num_seconds() > config.waiting_timeout_secs as i64 {
-                            return Ok(SessionStatus::WaitingForUser {
-                                tools: entry.get_tool_names(),
-                            });
-                        }
-                    }
-                }
-                return Ok(SessionStatus::Processing);
+                return Ok(check_tool_use_status(entry, config));
             }
-            if entry.type_ == "user" {
-                return Ok(SessionStatus::Processing);
-            }
-            if entry.is_progress() {
+            if entry.type_ == "user" || entry.is_progress() {
                 return Ok(SessionStatus::Processing);
             }
         }
@@ -147,22 +148,7 @@ pub fn detect_session_status_with_config(
 
     // Check for assistant with tool_use
     if last.is_tool_use() {
-        let tools = last.get_tool_names();
-
-        // Check if enough time has passed to consider it as waiting for user
-        if let Some(timestamp) = &last.timestamp {
-            if let Ok(entry_time) = DateTime::parse_from_rfc3339(timestamp) {
-                let now = Utc::now();
-                let elapsed = now.signed_duration_since(entry_time.with_timezone(&Utc));
-
-                if elapsed.num_seconds() > config.waiting_timeout_secs as i64 {
-                    return Ok(SessionStatus::WaitingForUser { tools });
-                }
-            }
-        }
-
-        // Recent tool_use - still Processing (executing)
-        return Ok(SessionStatus::Processing);
+        return Ok(check_tool_use_status(last, config));
     }
 
     // Check for assistant with text only (no tool_use) - this means Claude finished responding
