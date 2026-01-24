@@ -1,0 +1,256 @@
+use crate::transcript::SessionStatus;
+use ratatui::{
+    layout::Rect,
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
+};
+
+use super::session::{status_display, wrap_text_lines, ClaudeSession};
+
+/// Render the session list.
+pub fn render_list(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    sessions: &[ClaudeSession],
+    list_state: &mut ListState,
+    refreshing: bool,
+) -> Option<Rect> {
+    // cwd ごとのセッション数をカウント
+    let mut cwd_info: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for session in sessions {
+        if let Some(cwd) = session.pane.cwd_path() {
+            *cwd_info.entry(cwd).or_insert(0) += 1;
+        }
+    }
+
+    // リストアイテムを構築（ヘッダー + セッション）
+    let mut items: Vec<ListItem> = Vec::new();
+    let mut session_indices: Vec<usize> = Vec::new(); // ListItem index → session index マッピング
+    let mut current_cwd: Option<String> = None;
+
+    for (session_idx, session) in sessions.iter().enumerate() {
+        let pane = &session.pane;
+        let cwd = pane.cwd_path().unwrap_or_default();
+
+        // グループ情報を取得
+        let count = cwd_info.get(&cwd).copied().unwrap_or(1);
+
+        // 新しい CWD の場合はヘッダーを追加
+        if current_cwd.as_ref() != Some(&cwd) {
+            current_cwd = Some(cwd.clone());
+
+            // cwd の末尾ディレクトリ名を取得
+            let dir_name = std::path::Path::new(&cwd)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&cwd)
+                .to_string();
+
+            // 複数セッションの場合はセッション数も表示
+            let header_text = if count > 1 {
+                format!("📂 {} ({} sessions)", dir_name, count)
+            } else {
+                format!("📂 {}", dir_name)
+            };
+
+            let header_line = Line::from(vec![Span::raw(header_text)]);
+            items.push(ListItem::new(header_line));
+            session_indices.push(usize::MAX); // ヘッダーはセッションじゃない
+        }
+
+        // 状態アイコンと色
+        let (status_icon, status_color) = match &session.status {
+            SessionStatus::Ready => ("◇", Color::Cyan),
+            SessionStatus::Processing => ("●", Color::Yellow),
+            SessionStatus::Idle => ("○", Color::Green),
+            SessionStatus::WaitingForUser { .. } => ("◐", Color::Magenta),
+            SessionStatus::Unknown => ("?", Color::DarkGray),
+        };
+
+        // タイトル (最大35文字)
+        let title = if pane.title.chars().count() > 35 {
+            let truncated: String = pane.title.chars().take(32).collect();
+            format!("{}...", truncated)
+        } else {
+            pane.title.clone()
+        };
+
+        // インデント（すべてのセッションにインデント）
+        let line = Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                format!("{} ", status_icon),
+                Style::default()
+                    .fg(status_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("Pane {}: ", pane.pane_id),
+                Style::default().fg(Color::Cyan),
+            ),
+            Span::raw(title),
+            Span::styled(
+                format!(" [{}]", session.status.as_str()),
+                Style::default().fg(status_color),
+            ),
+        ]);
+
+        items.push(ListItem::new(line));
+        session_indices.push(session_idx);
+    }
+
+    // list_state のインデックスを ListItem のインデックスに変換
+    let list_index = list_state
+        .selected()
+        .and_then(|session_idx| session_indices.iter().position(|&idx| idx == session_idx));
+
+    let mut render_state = ListState::default();
+    render_state.select(list_index);
+
+    // タイトル（リフレッシュ中はインジケータ表示）
+    let title = if refreshing {
+        " ⌛ Claude Code Sessions - Refreshing... ".to_string()
+    } else {
+        format!(" Claude Code Sessions ({}) ", sessions.len())
+    };
+
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol(">> ");
+
+    f.render_stateful_widget(list, area, &mut render_state);
+
+    Some(area)
+}
+
+/// Render the details panel.
+pub fn render_details(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    sessions: &[ClaudeSession],
+    selected: Option<usize>,
+) {
+    let text = if let Some(i) = selected {
+        if let Some(session) = sessions.get(i) {
+            let pane = &session.pane;
+
+            let mut lines = vec![Line::from(vec![
+                Span::styled("Pane: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(pane.pane_id.to_string()),
+            ])];
+
+            if let Some(cwd) = pane.cwd_path() {
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![Span::styled(
+                    "CWD:",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )]));
+                lines.push(Line::from(cwd));
+            }
+
+            if let Some(tty) = &pane.tty_name {
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![
+                    Span::styled("TTY: ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(tty),
+                ]));
+            }
+
+            // Phase 3: セッション状態を表示
+            lines.push(Line::from(""));
+            let (status_color, status_text) = status_display(&session.status);
+            lines.push(Line::from(vec![
+                Span::styled("Status: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(status_text, Style::default().fg(status_color)),
+            ]));
+
+            // Git branch を表示
+            if let Some(branch) = &session.git_branch {
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![
+                    Span::styled("Branch: ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(branch, Style::default().fg(Color::Cyan)),
+                ]));
+            }
+
+            // Last prompt と Last output プレビューを表示
+            // 固定部分: Pane(2) + CWD(3) + TTY(2) + Status(2) + Branch(2) + ボーダー(2) = 約13行
+            let fixed_lines: u16 = 13;
+            let available_for_preview = area.height.saturating_sub(fixed_lines) as usize;
+            let inner_width = (area.width.saturating_sub(2)) as usize;
+
+            // 最低1行あれば表示（以前は3行で厳しすぎた）
+            if available_for_preview >= 1 {
+                // 区切り線
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![Span::styled(
+                    "─".repeat(inner_width),
+                    Style::default().fg(Color::DarkGray),
+                )]));
+
+                // Last prompt を表示（1-2行）
+                if let Some(prompt) = &session.last_prompt {
+                    lines.push(Line::from(vec![Span::styled(
+                        "💬 Last prompt:",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    )]));
+                    // プロンプトは1-2行で truncate
+                    let prompt_chars: Vec<char> = prompt.chars().collect();
+                    let max_prompt_len = inner_width * 2;
+                    let truncated: String = if prompt_chars.len() > max_prompt_len {
+                        prompt_chars[..max_prompt_len].iter().collect::<String>() + "..."
+                    } else {
+                        prompt_chars.iter().collect()
+                    };
+                    for line in truncated.lines().take(2) {
+                        lines.push(Line::from(Span::styled(
+                            line.to_string(),
+                            Style::default().fg(Color::Cyan),
+                        )));
+                    }
+                }
+
+                // Last output を表示
+                if let Some(output) = &session.last_output {
+                    // prompt と output の間に区切り線
+                    if session.last_prompt.is_some() {
+                        lines.push(Line::from(""));
+                        lines.push(Line::from(vec![Span::styled(
+                            "─".repeat(inner_width),
+                            Style::default().fg(Color::DarkGray),
+                        )]));
+                    }
+
+                    lines.push(Line::from(vec![Span::styled(
+                        "🤖 Last output:",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    )]));
+
+                    // 区切り + prompt + output label で約8行使う
+                    let preview_lines = available_for_preview.saturating_sub(8);
+                    let output_lines =
+                        wrap_text_lines(output, inner_width, preview_lines, Color::Gray);
+                    lines.extend(output_lines);
+                }
+            }
+
+            lines
+        } else {
+            vec![Line::from("No selection")]
+        }
+    } else {
+        vec![Line::from("No sessions")]
+    };
+
+    let paragraph = Paragraph::new(text)
+        .block(Block::default().borders(Borders::ALL).title(" Details "))
+        .wrap(Wrap { trim: false });
+
+    f.render_widget(paragraph, area);
+}
