@@ -157,8 +157,20 @@ pub fn detect_session_status_with_config(
         return Ok(SessionStatus::Idle);
     }
 
+    // Check for interrupted user entry - Idle (Claude hasn't started responding yet)
+    if last.is_interrupted() {
+        return Ok(SessionStatus::Idle);
+    }
+
     // Check for user entry with tool_result - Processing (waiting for next response)
+    // But first check if it's an interrupted result
     if last.is_tool_result() {
+        // Look back to see if there's an interruption message after the tool_result
+        for entry in entries.iter().rev().skip(1).take(3) {
+            if entry.is_interrupted() {
+                return Ok(SessionStatus::Idle);
+            }
+        }
         return Ok(SessionStatus::Processing);
     }
 
@@ -435,5 +447,43 @@ mod tests {
         let file = create_transcript(&[&entry]);
         let status = detect_session_status(file.path()).unwrap();
         assert!(matches!(status, SessionStatus::WaitingForUser { tools } if tools == vec!["Edit"]));
+    }
+
+    #[test]
+    fn test_detect_interrupted_text_returns_idle() {
+        // Interrupted text message should return Idle
+        let file = create_transcript(&[
+            r#"{"type":"user","timestamp":"2026-01-23T16:29:06.719Z","message":{"content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}"#,
+        ]);
+        let status = detect_session_status(file.path()).unwrap();
+        assert_eq!(status, SessionStatus::Idle);
+    }
+
+    #[test]
+    fn test_detect_interrupted_after_tool_result_returns_idle() {
+        // Sequence: assistant tool_use -> user tool_result (error) -> user interrupted message
+        let old_time = Utc::now() - chrono::Duration::seconds(5);
+        let timestamp = old_time.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+        let tool_use_entry = format!(
+            r#"{{"type":"assistant","timestamp":"{}","message":{{"stop_reason":"tool_use","content":[{{"type":"tool_use","name":"AskUserQuestion"}}]}}}}"#,
+            timestamp
+        );
+        let file = create_transcript(&[
+            &tool_use_entry,
+            r#"{"type":"user","timestamp":"2026-01-23T16:29:10.719Z","message":{"content":[{"type":"tool_result","content":"[Request interrupted by user for tool use]","is_error":true}]}}"#,
+            r#"{"type":"user","timestamp":"2026-01-23T16:29:10.720Z","message":{"content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}"#,
+        ]);
+        let status = detect_session_status(file.path()).unwrap();
+        assert_eq!(status, SessionStatus::Idle);
+    }
+
+    #[test]
+    fn test_detect_interrupted_simple_format_returns_idle() {
+        // Simple interruption without "for tool use"
+        let file = create_transcript(&[
+            r#"{"type":"user","timestamp":"2026-01-23T16:29:06.719Z","message":{"content":[{"type":"text","text":"[Request interrupted by user]"}]}}"#,
+        ]);
+        let status = detect_session_status(file.path()).unwrap();
+        assert_eq!(status, SessionStatus::Idle);
     }
 }

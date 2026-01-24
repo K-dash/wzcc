@@ -75,6 +75,8 @@ pub struct ContentBlock {
     pub type_: String,
     pub name: Option<String>,
     pub text: Option<String>,
+    pub content: Option<String>,
+    pub is_error: Option<bool>,
 }
 
 /// The message structure within an assistant entry.
@@ -171,6 +173,42 @@ impl TranscriptEntry {
             .as_ref()
             .map(|m| m.content.iter().any(|c| c.type_ == "tool_result"))
             .unwrap_or(false)
+    }
+
+    /// Check if this is an interrupted user entry.
+    /// Detects both:
+    /// - tool_result with is_error: true containing "[Request interrupted by user"
+    /// - Plain text message containing "[Request interrupted by user"
+    pub fn is_interrupted(&self) -> bool {
+        if self.type_ != "user" {
+            return false;
+        }
+
+        let Some(msg) = &self.message else {
+            return false;
+        };
+
+        for block in &msg.content {
+            // Check tool_result with is_error: true
+            if block.type_ == "tool_result" && block.is_error == Some(true) {
+                if let Some(content) = &block.content {
+                    if content.contains("[Request interrupted by user") {
+                        return true;
+                    }
+                }
+            }
+
+            // Check plain text message
+            if block.type_ == "text" {
+                if let Some(text) = &block.text {
+                    if text.contains("[Request interrupted by user") {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
     }
 
     /// Get the tool names from a tool_use message.
@@ -569,5 +607,54 @@ mod tests {
     fn test_truncate_with_ellipsis_multibyte() {
         let text = "日本語テスト".to_string();
         assert_eq!(truncate_with_ellipsis(text, 3), "日本語...");
+    }
+
+    // is_interrupted tests
+    #[test]
+    fn test_is_interrupted_text_message() {
+        // Plain text interruption message
+        let json = r#"{"type":"user","timestamp":"2026-01-23T16:29:06.719Z","message":{"content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.is_interrupted());
+    }
+
+    #[test]
+    fn test_is_interrupted_tool_result_with_error() {
+        // tool_result with is_error: true and interruption content
+        let json = r#"{"type":"user","timestamp":"2026-01-23T16:29:06.719Z","message":{"content":[{"type":"tool_result","content":"Exit code 137\n[Request interrupted by user for tool use]","is_error":true}]}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.is_interrupted());
+    }
+
+    #[test]
+    fn test_is_interrupted_false_normal_user_message() {
+        // Normal user message should not be interrupted
+        let json = r#"{"type":"user","timestamp":"2026-01-23T16:29:06.719Z","message":{"content":[{"type":"text","text":"Hello Claude"}]}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(!entry.is_interrupted());
+    }
+
+    #[test]
+    fn test_is_interrupted_false_tool_result_no_error() {
+        // tool_result without is_error should not be interrupted
+        let json = r#"{"type":"user","timestamp":"2026-01-23T16:29:06.719Z","message":{"content":[{"type":"tool_result","content":"some output"}]}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(!entry.is_interrupted());
+    }
+
+    #[test]
+    fn test_is_interrupted_false_not_user() {
+        // Non-user entry should not be interrupted
+        let json = r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"content":[{"type":"text","text":"[Request interrupted by user]"}]}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(!entry.is_interrupted());
+    }
+
+    #[test]
+    fn test_is_interrupted_simple_format() {
+        // Simple interruption without "for tool use"
+        let json = r#"{"type":"user","timestamp":"2026-01-23T16:29:06.719Z","message":{"content":[{"type":"text","text":"[Request interrupted by user]"}]}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.is_interrupted());
     }
 }
