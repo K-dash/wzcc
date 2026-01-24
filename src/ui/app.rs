@@ -318,34 +318,22 @@ impl App {
     /// リスト表示行からセッションインデックスを計算
     /// グループヘッダーを考慮して、クリックされた行が対応するセッションを返す
     fn row_to_session_index(&self, row: usize) -> Option<usize> {
-        // cwd ごとのセッション数をカウント
-        let mut cwd_counts: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
-        for session in &self.sessions {
-            if let Some(cwd) = session.pane.cwd_path() {
-                *cwd_counts.entry(cwd).or_insert(0) += 1;
-            }
-        }
-
         // 行番号からセッションインデックスをマッピング
         let mut current_row = 0;
         let mut current_cwd: Option<String> = None;
 
         for (session_idx, session) in self.sessions.iter().enumerate() {
             let cwd = session.pane.cwd_path().unwrap_or_default();
-            let count = cwd_counts.get(&cwd).copied().unwrap_or(1);
 
-            // 新しいグループの場合はヘッダー行を追加（2つ以上のセッションがある場合のみ）
+            // 新しい CWD の場合はヘッダー行を追加
             if current_cwd.as_ref() != Some(&cwd) {
                 current_cwd = Some(cwd.clone());
-                if count > 1 {
-                    // ヘッダー行
-                    if current_row == row {
-                        // ヘッダークリックは無視（セッションじゃない）
-                        return None;
-                    }
-                    current_row += 1;
+                // ヘッダー行
+                if current_row == row {
+                    // ヘッダークリックは無視（セッションじゃない）
+                    return None;
                 }
+                current_row += 1;
             }
 
             // セッション行
@@ -563,26 +551,31 @@ impl App {
             // グループ情報を取得
             let (count, group_color) = cwd_info.get(&cwd).copied().unwrap_or((1, Color::White));
 
-            // 新しいグループの場合はヘッダーを追加（2つ以上のセッションがある場合のみ）
+            // 新しい CWD の場合はヘッダーを追加
             if current_cwd.as_ref() != Some(&cwd) {
                 current_cwd = Some(cwd.clone());
 
-                if count > 1 {
-                    // cwd の末尾ディレクトリ名を取得
-                    let dir_name = std::path::Path::new(&cwd)
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or(&cwd);
+                // cwd の末尾ディレクトリ名を取得
+                let dir_name = std::path::Path::new(&cwd)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(&cwd);
 
-                    let header_line = Line::from(vec![Span::styled(
-                        format!("┌─ {} ({} sessions) ", dir_name, count),
-                        Style::default()
-                            .fg(group_color)
-                            .add_modifier(Modifier::BOLD),
-                    )]);
-                    items.push(ListItem::new(header_line));
-                    session_indices.push(usize::MAX); // ヘッダーはセッションじゃない
-                }
+                // 複数セッションの場合はセッション数も表示
+                let header_text = if count > 1 {
+                    format!("┌─ {} ({} sessions) ", dir_name, count)
+                } else {
+                    format!("┌─ {} ", dir_name)
+                };
+
+                let header_line = Line::from(vec![Span::styled(
+                    header_text,
+                    Style::default()
+                        .fg(group_color)
+                        .add_modifier(Modifier::BOLD),
+                )]);
+                items.push(ListItem::new(header_line));
+                session_indices.push(usize::MAX); // ヘッダーはセッションじゃない
             }
 
             // 状態アイコンと色
@@ -601,8 +594,8 @@ impl App {
                 pane.title.clone()
             };
 
-            // インデント（グループ内のセッションは少しインデント）
-            let indent = if count > 1 { "│ " } else { "" };
+            // インデント（すべてのセッションにインデント）
+            let indent = "│ ";
 
             let line = Line::from(vec![
                 Span::styled(indent, Style::default().fg(group_color)),
