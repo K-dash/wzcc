@@ -80,8 +80,8 @@ pub fn detect_session_status_with_config(
     // Find the last meaningful entry
     let last = entries.last().unwrap();
 
-    // Check for progress type - always Processing
-    if last.is_progress() {
+    // Check for progress type - Processing (but not hook_progress which is just session hooks)
+    if last.is_progress() && !last.is_hook_progress() {
         return Ok(SessionStatus::Processing);
     }
 
@@ -90,14 +90,23 @@ pub fn detect_session_status_with_config(
         return Ok(SessionStatus::Idle);
     }
 
-    // For system entries (other than stop_hook_summary/turn_duration) or internal entries
-    // like file-history-snapshot, queue-operation, etc., look at previous entries
+    // For system entries (other than stop_hook_summary/turn_duration), internal entries
+    // like file-history-snapshot, queue-operation, or hook_progress, look at previous entries
     if last.type_ == "system"
         || last.type_ == "file-history-snapshot"
         || last.type_ == "queue-operation"
+        || last.is_hook_progress()
     {
         // Find the last meaningful entry (assistant or user)
         for entry in entries.iter().rev().skip(1) {
+            // Skip internal entries that don't indicate real activity
+            if entry.type_ == "file-history-snapshot"
+                || entry.type_ == "queue-operation"
+                || entry.is_hook_progress()
+            {
+                continue;
+            }
+
             if entry.is_stop_hook_summary() || entry.is_turn_duration() || entry.is_end_turn() {
                 return Ok(SessionStatus::Idle);
             }
@@ -126,6 +135,9 @@ pub fn detect_session_status_with_config(
                 return Ok(SessionStatus::Processing);
             }
         }
+
+        // No meaningful entries found - this is a fresh session (e.g., after /clear)
+        return Ok(SessionStatus::Ready);
     }
 
     // Check for assistant with end_turn - Idle

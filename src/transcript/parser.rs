@@ -31,6 +31,13 @@ pub struct AssistantMessage {
     pub content: Vec<ContentBlock>,
 }
 
+/// Progress data for hook progress entries.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProgressData {
+    #[serde(rename = "type")]
+    pub type_: Option<String>,
+}
+
 /// A transcript entry (one line from the JSONL file).
 #[derive(Debug, Clone, Deserialize)]
 pub struct TranscriptEntry {
@@ -39,6 +46,7 @@ pub struct TranscriptEntry {
     pub subtype: Option<String>,
     pub timestamp: Option<String>,
     pub message: Option<AssistantMessage>,
+    pub data: Option<ProgressData>,
 }
 
 impl TranscriptEntry {
@@ -77,6 +85,17 @@ impl TranscriptEntry {
     /// Check if this is a progress entry (indicates processing).
     pub fn is_progress(&self) -> bool {
         self.type_ == "progress"
+    }
+
+    /// Check if this is a hook_progress entry (session hooks, not Claude processing).
+    pub fn is_hook_progress(&self) -> bool {
+        self.type_ == "progress"
+            && self
+                .data
+                .as_ref()
+                .and_then(|d| d.type_.as_deref())
+                .map(|t| t == "hook_progress")
+                .unwrap_or(false)
     }
 
     /// Check if this is a system stop_hook_summary (indicates idle).
