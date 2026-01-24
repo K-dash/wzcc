@@ -2,7 +2,7 @@ use crate::cli::WeztermCli;
 use crate::datasource::{PaneDataSource, ProcessDataSource, SystemProcessDataSource, WeztermDataSource};
 use crate::detector::{ClaudeCodeDetector, DetectionReason};
 use crate::models::Pane;
-use crate::transcript::{get_transcript_dir, get_latest_transcript, detect_session_status, SessionStatus};
+use crate::transcript::{get_transcript_dir, get_latest_transcript, detect_session_status, SessionStatus, get_last_assistant_text};
 use anyhow::Result;
 use crossterm::{
     execute,
@@ -33,6 +33,8 @@ pub struct ClaudeSession {
     pub status: SessionStatus,
     /// Git branch name
     pub git_branch: Option<String>,
+    /// Last assistant output text (from transcript)
+    pub last_output: Option<String>,
 }
 
 /// TUI アプリケーション
@@ -49,6 +51,8 @@ pub struct App {
     dirty: bool,
     /// リフレッシュ中フラグ
     refreshing: bool,
+    /// フル再描画が必要か（選択変更時などに差分描画の残像を防ぐ）
+    needs_full_redraw: bool,
 }
 
 impl Default for App {
@@ -70,6 +74,7 @@ impl App {
             detector: ClaudeCodeDetector::new(),
             dirty: true,
             refreshing: false,
+            needs_full_redraw: true,
         }
     }
 
@@ -102,7 +107,7 @@ impl App {
                 let reason = self.detector.detect_by_tty_with_tree(&pane, &process_tree).ok()??;
 
                 // セッション状態を取得
-                let status = Self::detect_status_for_pane(&pane);
+                let (status, last_output) = Self::detect_status_and_output_for_pane(&pane);
 
                 // Git branch を取得
                 let git_branch = pane.cwd_path().and_then(|cwd| Self::get_git_branch(&cwd));
@@ -114,9 +119,28 @@ impl App {
                     reason,
                     status,
                     git_branch,
+                    last_output,
                 })
             })
             .collect();
+
+        // 同じ cwd で複数セッションがある場合は last_output を表示できない
+        // cwd ごとのセッション数をカウント
+        let mut cwd_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for session in &self.sessions {
+            if let Some(cwd) = session.pane.cwd_path() {
+                *cwd_counts.entry(cwd).or_insert(0) += 1;
+            }
+        }
+
+        // 重複している cwd のセッションは last_output をクリア
+        for session in &mut self.sessions {
+            if let Some(cwd) = session.pane.cwd_path() {
+                if cwd_counts.get(&cwd).copied().unwrap_or(0) > 1 {
+                    session.last_output = Some("Multiple sessions share this CWD 😢".to_string());
+                }
+            }
+        }
 
         // 選択位置を維持（同じ pane_id があれば選択し直す）
         if !self.sessions.is_empty() {
@@ -133,24 +157,29 @@ impl App {
         Ok(())
     }
 
-    /// Pane の cwd からトランスクリプトを読んで状態を検出
-    fn detect_status_for_pane(pane: &Pane) -> SessionStatus {
+    /// Pane の cwd からトランスクリプトを読んで状態と最終出力を検出
+    fn detect_status_and_output_for_pane(pane: &Pane) -> (SessionStatus, Option<String>) {
         let cwd = match pane.cwd_path() {
             Some(cwd) => cwd,
-            None => return SessionStatus::Unknown,
+            None => return (SessionStatus::Unknown, None),
         };
 
         let dir = match get_transcript_dir(&cwd) {
             Some(dir) => dir,
-            None => return SessionStatus::Unknown,
+            None => return (SessionStatus::Unknown, None),
         };
 
         let transcript_path = match get_latest_transcript(&dir) {
             Ok(Some(path)) => path,
-            _ => return SessionStatus::Unknown,
+            _ => return (SessionStatus::Unknown, None),
         };
 
-        detect_session_status(&transcript_path).unwrap_or(SessionStatus::Unknown)
+        let status = detect_session_status(&transcript_path).unwrap_or(SessionStatus::Unknown);
+
+        // Get last assistant text (max 1000 chars)
+        let last_output = get_last_assistant_text(&transcript_path, 1000).ok().flatten();
+
+        (status, last_output)
     }
 
     /// cwd から git branch を取得
@@ -190,6 +219,7 @@ impl App {
 
         self.list_state.select(Some(i));
         self.dirty = true;
+        self.needs_full_redraw = true;
     }
 
     /// 前のアイテムを選択
@@ -211,6 +241,7 @@ impl App {
 
         self.list_state.select(Some(i));
         self.dirty = true;
+        self.needs_full_redraw = true;
     }
 
     /// 選択中のセッションにジャンプ
@@ -246,6 +277,11 @@ impl App {
         let result = loop {
             // dirty flag が立っている場合のみ描画
             if self.dirty {
+                // フル再描画が必要な場合はターミナルをクリア
+                if self.needs_full_redraw {
+                    terminal.clear()?;
+                    self.needs_full_redraw = false;
+                }
                 terminal.draw(|f| self.render(f))?;
                 self.dirty = false;
             }
@@ -277,6 +313,8 @@ impl App {
                 Event::Tick => {
                     // 3秒ごとに自動リフレッシュ（インジケータなし）
                     self.refresh()?;
+                    // last_output が変わると残像が出る可能性があるのでフル再描画
+                    self.needs_full_redraw = true;
                 }
             }
         };
@@ -297,10 +335,10 @@ impl App {
         // pane 切り替え後に描画が見えない問題があるため一旦スキップ
         let main_area = size;
 
-        // 2カラムレイアウト (左: リスト 40%, 右: 詳細 60%)
+        // 2カラムレイアウト (左: リスト 45%, 右: 詳細 55%)
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+            .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
             .split(main_area);
 
         self.render_list(f, chunks[0]);
@@ -434,6 +472,57 @@ impl App {
                     ]));
                 }
 
+                // Last output プレビューを表示
+                // 固定部分: Pane(2) + CWD(3) + TTY(2) + Status(2) + Branch(2) + 区切り(3) + ボーダー(2) = 約16行
+                let fixed_lines: u16 = 16;
+                let available_for_preview = area.height.saturating_sub(fixed_lines) as usize;
+
+                // 最低3行ないと表示しない
+                if available_for_preview >= 3 {
+                    if let Some(output) = &session.last_output {
+                        // 区切り線
+                        lines.push(Line::from(""));
+                        lines.push(Line::from(vec![Span::styled(
+                            "─".repeat((area.width.saturating_sub(2)) as usize),
+                            Style::default().fg(Color::DarkGray),
+                        )]));
+                        lines.push(Line::from(vec![Span::styled(
+                            "Last output:",
+                            Style::default().add_modifier(Modifier::BOLD),
+                        )]));
+                        lines.push(Line::from(""));
+
+                        // テキストを行数に合わせて表示
+                        // 各行の幅を考慮して改行
+                        let inner_width = (area.width.saturating_sub(2)) as usize;
+                        let preview_lines = available_for_preview.saturating_sub(4); // 区切り等で4行使う
+
+                        let mut output_lines: Vec<Line> = Vec::new();
+                        for line in output.lines() {
+                            // 長い行は折り返す
+                            if line.is_empty() {
+                                output_lines.push(Line::from(""));
+                            } else {
+                                let chars: Vec<char> = line.chars().collect();
+                                for chunk in chars.chunks(inner_width.max(1)) {
+                                    output_lines.push(Line::from(Span::styled(
+                                        chunk.iter().collect::<String>(),
+                                        Style::default().fg(Color::Gray),
+                                    )));
+                                    if output_lines.len() >= preview_lines {
+                                        break;
+                                    }
+                                }
+                            }
+                            if output_lines.len() >= preview_lines {
+                                break;
+                            }
+                        }
+
+                        lines.extend(output_lines);
+                    }
+                }
+
                 lines
             } else {
                 vec![Line::from("No selection")]
@@ -441,6 +530,9 @@ impl App {
         } else {
             vec![Line::from("No sessions")]
         };
+
+        // Clear the entire area first to avoid remnants from previous content
+        f.render_widget(ratatui::widgets::Clear, area);
 
         let paragraph = Paragraph::new(text)
             .block(Block::default().borders(Borders::ALL).title(" Details "))

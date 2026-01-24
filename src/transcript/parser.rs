@@ -129,8 +129,9 @@ pub fn read_last_entries(path: &Path, count: usize) -> Result<Vec<TranscriptEntr
         }
     } else {
         // For large files, seek to near the end and read
-        // We estimate ~10KB per entry and read extra to be safe
-        let seek_pos = file_size.saturating_sub((count as u64 + 10) * 10 * 1024);
+        // We estimate ~100KB per entry (entries can be quite large with tool outputs)
+        // and read extra to be safe
+        let seek_pos = file_size.saturating_sub((count as u64 + 10) * 100 * 1024);
         reader.seek(SeekFrom::Start(seek_pos))?;
 
         // Skip partial line if we seeked to middle
@@ -165,6 +166,49 @@ pub fn read_last_entries(path: &Path, count: usize) -> Result<Vec<TranscriptEntr
 pub fn read_last_entry(path: &Path) -> Result<Option<TranscriptEntry>> {
     let entries = read_last_entries(path, 1)?;
     Ok(entries.into_iter().next())
+}
+
+/// Get the last assistant text output from a transcript file.
+/// Returns the text content (up to max_chars) from the most recent assistant message.
+pub fn get_last_assistant_text(path: &Path, max_chars: usize) -> Result<Option<String>> {
+    // Read more entries to find an assistant message with text
+    // (some entries might be tool_use only)
+    let entries = read_last_entries(path, 20)?;
+
+    // Search from the end for an assistant message with text content
+    for entry in entries.iter().rev() {
+        if entry.type_ != "assistant" {
+            continue;
+        }
+
+        let Some(msg) = &entry.message else {
+            continue;
+        };
+
+        // Collect all text content from this message
+        let text: String = msg
+            .content
+            .iter()
+            .filter(|c| c.type_ == "text")
+            .filter_map(|c| c.text.as_ref())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        if !text.is_empty() {
+            // Truncate to max_chars
+            let truncated = if text.chars().count() > max_chars {
+                let mut s: String = text.chars().take(max_chars).collect();
+                s.push_str("...");
+                s
+            } else {
+                text
+            };
+            return Ok(Some(truncated));
+        }
+    }
+
+    Ok(None)
 }
 
 #[cfg(test)]
