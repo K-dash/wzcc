@@ -253,9 +253,7 @@ mod tests {
 
     #[test]
     fn test_process_tree_get() {
-        let processes = vec![
-            create_process(100, 1, "bash"),
-        ];
+        let processes = vec![create_process(100, 1, "bash")];
 
         let tree = ProcessTree::build(processes);
 
@@ -294,9 +292,7 @@ mod tests {
     #[test]
     fn test_has_ancestor_self() {
         // Check if process itself matches (it should)
-        let processes = vec![
-            create_process(100, 1, "claude"),
-        ];
+        let processes = vec![create_process(100, 1, "claude")];
 
         let tree = ProcessTree::build(processes);
 
@@ -359,7 +355,7 @@ mod tests {
     fn test_has_ancestor_missing_parent() {
         // Parent process doesn't exist in tree
         let processes = vec![
-            create_process(200, 999, "vim"),  // 999 doesn't exist
+            create_process(200, 999, "vim"), // 999 doesn't exist
         ];
 
         let tree = ProcessTree::build(processes);
@@ -371,9 +367,7 @@ mod tests {
     #[test]
     fn test_has_ancestor_root_process() {
         // Process with ppid 0 (like init)
-        let processes = vec![
-            create_process(1, 0, "init"),
-        ];
+        let processes = vec![create_process(1, 0, "init")];
 
         let tree = ProcessTree::build(processes);
 

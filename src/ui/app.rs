@@ -112,7 +112,9 @@ impl App {
                     ClaudeSession::detect_status_and_output(&pane);
 
                 // Get git branch
-                let git_branch = pane.cwd_path().and_then(|cwd| ClaudeSession::get_git_branch(&cwd));
+                let git_branch = pane
+                    .cwd_path()
+                    .and_then(|cwd| ClaudeSession::get_git_branch(&cwd));
 
                 // Keep only detected sessions
                 Some(ClaudeSession {

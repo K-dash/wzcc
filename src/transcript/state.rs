@@ -260,9 +260,8 @@ mod tests {
 
     #[test]
     fn test_detect_progress_returns_processing() {
-        let file = create_transcript(&[
-            r#"{"type":"progress","timestamp":"2026-01-23T16:29:06.719Z"}"#,
-        ]);
+        let file =
+            create_transcript(&[r#"{"type":"progress","timestamp":"2026-01-23T16:29:06.719Z"}"#]);
         let status = detect_session_status(file.path()).unwrap();
         assert_eq!(status, SessionStatus::Processing);
     }
@@ -307,9 +306,8 @@ mod tests {
     #[test]
     fn test_detect_user_entry_returns_processing() {
         // Use valid JSON format that parser can handle
-        let file = create_transcript(&[
-            r#"{"type":"user","timestamp":"2026-01-23T16:29:06.719Z"}"#,
-        ]);
+        let file =
+            create_transcript(&[r#"{"type":"user","timestamp":"2026-01-23T16:29:06.719Z"}"#]);
         let status = detect_session_status(file.path()).unwrap();
         assert_eq!(status, SessionStatus::Processing);
     }
@@ -348,7 +346,9 @@ mod tests {
         );
         let file = create_transcript(&[&entry]);
         let status = detect_session_status(file.path()).unwrap();
-        assert!(matches!(status, SessionStatus::WaitingForUser { tools } if tools == vec!["AskUserQuestion"]));
+        assert!(
+            matches!(status, SessionStatus::WaitingForUser { tools } if tools == vec!["AskUserQuestion"])
+        );
     }
 
     #[test]

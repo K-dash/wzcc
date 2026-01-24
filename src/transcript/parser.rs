@@ -509,7 +509,8 @@ mod tests {
     // is_turn_duration tests
     #[test]
     fn test_is_turn_duration_true() {
-        let json = r#"{"type":"system","subtype":"turn_duration","timestamp":"2026-01-23T16:29:06.719Z"}"#;
+        let json =
+            r#"{"type":"system","subtype":"turn_duration","timestamp":"2026-01-23T16:29:06.719Z"}"#;
         let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
         assert!(entry.is_turn_duration());
     }
