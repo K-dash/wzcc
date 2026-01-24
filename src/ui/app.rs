@@ -601,13 +601,13 @@ impl App {
                 }
 
                 // Last prompt と Last output プレビューを表示
-                // 固定部分: Pane(2) + CWD(3) + TTY(2) + Status(2) + Branch(2) + 区切り(3) + Prompt(3) + ボーダー(2) = 約19行
-                let fixed_lines: u16 = 19;
+                // 固定部分: Pane(2) + CWD(3) + TTY(2) + Status(2) + Branch(2) + ボーダー(2) = 約13行
+                let fixed_lines: u16 = 13;
                 let available_for_preview = area.height.saturating_sub(fixed_lines) as usize;
                 let inner_width = (area.width.saturating_sub(2)) as usize;
 
-                // 最低3行ないと表示しない
-                if available_for_preview >= 3 {
+                // 最低1行あれば表示（以前は3行で厳しすぎた）
+                if available_for_preview >= 1 {
                     // 区切り線
                     lines.push(Line::from(""));
                     lines.push(Line::from(vec![Span::styled(

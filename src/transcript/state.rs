@@ -81,8 +81,8 @@ pub fn detect_session_status_with_config(
         return Ok(SessionStatus::Processing);
     }
 
-    // Check for system stop_hook_summary - indicates Idle
-    if last.is_stop_hook_summary() {
+    // Check for system stop_hook_summary or turn_duration - indicates Idle
+    if last.is_stop_hook_summary() || last.is_turn_duration() {
         return Ok(SessionStatus::Idle);
     }
 
@@ -111,9 +111,43 @@ pub fn detect_session_status_with_config(
         return Ok(SessionStatus::Processing);
     }
 
+    // Check for assistant with text only (no tool_use) - this means Claude finished responding
+    // and is waiting for user input, so it's Idle
+    if last.type_ == "assistant" && !last.is_tool_use() {
+        return Ok(SessionStatus::Idle);
+    }
+
     // Check for user entry with tool_result - Processing (waiting for next response)
     if last.is_tool_result() {
         return Ok(SessionStatus::Processing);
+    }
+
+    // Check for user entry (not tool_result) - Processing (Claude is about to respond)
+    if last.type_ == "user" {
+        return Ok(SessionStatus::Processing);
+    }
+
+    // Look back to find the most recent user message, then check what happened after
+    // Find the index of the last user entry
+    let last_user_idx = entries.iter().rposition(|e| e.type_ == "user");
+
+    if let Some(idx) = last_user_idx {
+        // Check entries after the last user message
+        let after_user = &entries[idx + 1..];
+
+        // If turn_duration or stop_hook_summary exists after user message, it's Idle
+        for entry in after_user.iter() {
+            if entry.is_stop_hook_summary() || entry.is_turn_duration() || entry.is_end_turn() {
+                return Ok(SessionStatus::Idle);
+            }
+        }
+
+        // If progress exists after user message (and no turn_duration), it's Processing
+        for entry in after_user.iter() {
+            if entry.is_progress() {
+                return Ok(SessionStatus::Processing);
+            }
+        }
     }
 
     // Check for assistant with stop_reason: null - still streaming
@@ -122,16 +156,6 @@ pub fn detect_session_status_with_config(
             if msg.stop_reason.is_none() {
                 return Ok(SessionStatus::Processing);
             }
-        }
-    }
-
-    // Look back for recent activity to determine state
-    for entry in entries.iter().rev().skip(1) {
-        if entry.is_progress() || entry.is_tool_result() {
-            return Ok(SessionStatus::Processing);
-        }
-        if entry.is_stop_hook_summary() || entry.is_end_turn() {
-            return Ok(SessionStatus::Idle);
         }
     }
 

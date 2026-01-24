@@ -84,6 +84,11 @@ impl TranscriptEntry {
         self.type_ == "system" && self.subtype.as_deref() == Some("stop_hook_summary")
     }
 
+    /// Check if this is a system turn_duration (indicates idle - turn completed).
+    pub fn is_turn_duration(&self) -> bool {
+        self.type_ == "system" && self.subtype.as_deref() == Some("turn_duration")
+    }
+
     /// Check if this is a user entry with a tool_result.
     pub fn is_tool_result(&self) -> bool {
         if self.type_ != "user" {
