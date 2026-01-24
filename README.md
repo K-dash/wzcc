@@ -7,8 +7,8 @@
 A TUI tool to list and navigate Claude Code sessions running in WezTerm tabs/panes. Quickly jump between multiple Claude Code instances with intelligent session detection.
 
 <div align="center">
-  <a href="https://github.com/furukawa/wzcc/graphs/commit-activity"><img alt="GitHub commit activity" src="https://img.shields.io/github/commit-activity/m/furukawa/wzcc"/></a>
-  <a href="https://github.com/furukawa/wzcc/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/LICENSE-MIT-green"/></a>
+  <a href="https://github.com/K-dash/wzcc/graphs/commit-activity"><img alt="GitHub commit activity" src="https://img.shields.io/github/commit-activity/m/K-dash/wzcc"/></a>
+  <a href="https://github.com/K-dash/wzcc/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/LICENSE-MIT-green"/></a>
   <a href="https://www.rust-lang.org/"><img alt="Rust" src="https://img.shields.io/badge/rust-1.70+-orange.svg"/></a>
 </div>
 
@@ -71,7 +71,7 @@ wzcc simplifies management of multiple Claude Code sessions in WezTerm. Instead 
 
 ```bash
 # Clone the repository
-git clone https://github.com/furukawa/wzcc.git
+git clone https://github.com/K-dash/wzcc.git
 cd wzcc
 
 # Build release binary
@@ -141,7 +141,7 @@ Once the TUI launches:
 
 ```bash
 # Clone repository
-git clone https://github.com/furukawa/wzcc.git
+git clone https://github.com/K-dash/wzcc.git
 cd wzcc
 
 # Build and install
