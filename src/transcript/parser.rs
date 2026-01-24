@@ -418,4 +418,172 @@ mod tests {
         let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
         assert!(entry.is_stop_hook_summary());
     }
+
+    // Additional is_tool_use tests
+    #[test]
+    fn test_is_tool_use_not_assistant() {
+        // is_tool_use should return false for non-assistant entries
+        let json = r#"{"type":"user","timestamp":"2026-01-23T16:29:06.719Z"}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(!entry.is_tool_use());
+    }
+
+    #[test]
+    fn test_is_tool_use_no_message() {
+        // Assistant without message should return false
+        let json = r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z"}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(!entry.is_tool_use());
+    }
+
+    #[test]
+    fn test_is_tool_use_empty_content() {
+        // Assistant with empty content and no stop_reason should return false
+        let json = r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"stop_reason":null,"content":[]}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(!entry.is_tool_use());
+    }
+
+    #[test]
+    fn test_is_tool_use_text_only() {
+        // Assistant with only text content should return false
+        let json = r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"Hello"}]}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(!entry.is_tool_use());
+    }
+
+    #[test]
+    fn test_is_tool_use_multiple_tools() {
+        // Multiple tool_use blocks
+        let json = r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"stop_reason":"tool_use","content":[{"type":"tool_use","name":"Read"},{"type":"tool_use","name":"Glob"}]}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.is_tool_use());
+        assert_eq!(entry.get_tool_names(), vec!["Read", "Glob"]);
+    }
+
+    #[test]
+    fn test_is_tool_use_mixed_content() {
+        // Text and tool_use mixed
+        let json = r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"stop_reason":"tool_use","content":[{"type":"text","text":"Let me check"},{"type":"tool_use","name":"Read"}]}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.is_tool_use());
+        assert_eq!(entry.get_tool_names(), vec!["Read"]);
+    }
+
+    // is_end_turn tests
+    #[test]
+    fn test_is_end_turn_true() {
+        let json = r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"stop_reason":"end_turn","content":[]}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.is_end_turn());
+    }
+
+    #[test]
+    fn test_is_end_turn_false_tool_use() {
+        let json = r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"stop_reason":"tool_use","content":[]}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(!entry.is_end_turn());
+    }
+
+    // is_hook_progress tests
+    #[test]
+    fn test_is_hook_progress_true() {
+        let json = r#"{"type":"progress","timestamp":"2026-01-23T16:29:06.719Z","data":{"type":"hook_progress"}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.is_hook_progress());
+        assert!(entry.is_progress());
+    }
+
+    #[test]
+    fn test_is_hook_progress_false_no_data() {
+        let json = r#"{"type":"progress","timestamp":"2026-01-23T16:29:06.719Z"}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(!entry.is_hook_progress());
+        assert!(entry.is_progress());
+    }
+
+    #[test]
+    fn test_is_hook_progress_false_different_type() {
+        let json = r#"{"type":"progress","timestamp":"2026-01-23T16:29:06.719Z","data":{"type":"other_progress"}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(!entry.is_hook_progress());
+    }
+
+    // is_turn_duration tests
+    #[test]
+    fn test_is_turn_duration_true() {
+        let json = r#"{"type":"system","subtype":"turn_duration","timestamp":"2026-01-23T16:29:06.719Z"}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.is_turn_duration());
+    }
+
+    #[test]
+    fn test_is_turn_duration_false() {
+        let json = r#"{"type":"system","subtype":"other","timestamp":"2026-01-23T16:29:06.719Z"}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(!entry.is_turn_duration());
+    }
+
+    // is_tool_result tests
+    #[test]
+    fn test_is_tool_result_true() {
+        let json = r#"{"type":"user","timestamp":"2026-01-23T16:29:06.719Z","message":{"content":[{"type":"tool_result","tool_use_id":"123"}]}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.is_tool_result());
+    }
+
+    #[test]
+    fn test_is_tool_result_false_not_user() {
+        let json = r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"content":[{"type":"tool_result"}]}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(!entry.is_tool_result());
+    }
+
+    #[test]
+    fn test_is_tool_result_false_no_tool_result() {
+        let json = r#"{"type":"user","timestamp":"2026-01-23T16:29:06.719Z","message":{"content":[{"type":"text","text":"hello"}]}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(!entry.is_tool_result());
+    }
+
+    // remove_system_reminders tests
+    #[test]
+    fn test_remove_system_reminders() {
+        let text = "Hello <system-reminder>some reminder</system-reminder> World";
+        assert_eq!(remove_system_reminders(text), "Hello  World");
+    }
+
+    #[test]
+    fn test_remove_system_reminders_multiline() {
+        let text = "Hello <system-reminder>\nmultiline\nreminder\n</system-reminder> World";
+        assert_eq!(remove_system_reminders(text), "Hello  World");
+    }
+
+    #[test]
+    fn test_remove_system_reminders_multiple() {
+        let text = "<system-reminder>first</system-reminder> Middle <system-reminder>second</system-reminder>";
+        assert_eq!(remove_system_reminders(text), "Middle");
+    }
+
+    #[test]
+    fn test_remove_system_reminders_none() {
+        let text = "No reminders here";
+        assert_eq!(remove_system_reminders(text), "No reminders here");
+    }
+
+    // get_tool_names tests
+    #[test]
+    fn test_get_tool_names_empty() {
+        let json = r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"content":[{"type":"text","text":"hello"}]}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.get_tool_names().is_empty());
+    }
+
+    #[test]
+    fn test_get_tool_names_no_name() {
+        // tool_use without name field
+        let json = r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"content":[{"type":"tool_use"}]}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.get_tool_names().is_empty());
+    }
 }

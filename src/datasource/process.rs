@@ -193,6 +193,26 @@ impl ProcessDataSource for SystemProcessDataSource {
 mod tests {
     use super::*;
 
+    fn create_process(pid: u32, ppid: u32, command: &str) -> ProcessInfo {
+        ProcessInfo {
+            pid,
+            ppid,
+            tty: None,
+            command: command.to_string(),
+            args: None,
+        }
+    }
+
+    fn create_process_with_args(pid: u32, ppid: u32, command: &str, args: &str) -> ProcessInfo {
+        ProcessInfo {
+            pid,
+            ppid,
+            tty: None,
+            command: command.to_string(),
+            args: Some(args.to_string()),
+        }
+    }
+
     #[test]
     fn test_normalize_tty() {
         assert_eq!(
@@ -209,6 +229,156 @@ mod tests {
         );
         assert_eq!(SystemProcessDataSource::normalize_tty("?"), None);
         assert_eq!(SystemProcessDataSource::normalize_tty(""), None);
+    }
+
+    #[test]
+    fn test_process_tree_build() {
+        let processes = vec![
+            create_process(1, 0, "init"),
+            create_process(100, 1, "bash"),
+            create_process(200, 100, "vim"),
+        ];
+
+        let tree = ProcessTree::build(processes);
+
+        assert_eq!(tree.processes.len(), 3);
+        assert!(tree.processes.contains_key(&1));
+        assert!(tree.processes.contains_key(&100));
+        assert!(tree.processes.contains_key(&200));
+
+        // Check children structure
+        assert_eq!(tree.children.get(&1), Some(&vec![100]));
+        assert_eq!(tree.children.get(&100), Some(&vec![200]));
+    }
+
+    #[test]
+    fn test_process_tree_get() {
+        let processes = vec![
+            create_process(100, 1, "bash"),
+        ];
+
+        let tree = ProcessTree::build(processes);
+
+        assert!(tree.get(100).is_some());
+        assert_eq!(tree.get(100).unwrap().command, "bash");
+        assert!(tree.get(999).is_none());
+    }
+
+    #[test]
+    fn test_has_ancestor_direct_parent() {
+        // 100 -> 200, find "bash" from 200
+        let processes = vec![
+            create_process(100, 1, "bash"),
+            create_process(200, 100, "vim"),
+        ];
+
+        let tree = ProcessTree::build(processes);
+
+        assert!(tree.has_ancestor(200, "bash"));
+    }
+
+    #[test]
+    fn test_has_ancestor_grandparent() {
+        // 100 -> 200 -> 300, find "bash" from 300
+        let processes = vec![
+            create_process(100, 1, "bash"),
+            create_process(200, 100, "zsh"),
+            create_process(300, 200, "vim"),
+        ];
+
+        let tree = ProcessTree::build(processes);
+
+        assert!(tree.has_ancestor(300, "bash"));
+    }
+
+    #[test]
+    fn test_has_ancestor_self() {
+        // Check if process itself matches (it should)
+        let processes = vec![
+            create_process(100, 1, "claude"),
+        ];
+
+        let tree = ProcessTree::build(processes);
+
+        assert!(tree.has_ancestor(100, "claude"));
+    }
+
+    #[test]
+    fn test_has_ancestor_not_found() {
+        let processes = vec![
+            create_process(100, 1, "bash"),
+            create_process(200, 100, "vim"),
+        ];
+
+        let tree = ProcessTree::build(processes);
+
+        assert!(!tree.has_ancestor(200, "claude"));
+    }
+
+    #[test]
+    fn test_has_ancestor_in_args() {
+        // claude is in args, not command
+        let processes = vec![
+            create_process_with_args(100, 1, "node", "/path/to/claude"),
+            create_process(200, 100, "vim"),
+        ];
+
+        let tree = ProcessTree::build(processes);
+
+        assert!(tree.has_ancestor(200, "claude"));
+    }
+
+    #[test]
+    fn test_has_ancestor_case_insensitive() {
+        let processes = vec![
+            create_process(100, 1, "CLAUDE"),
+            create_process(200, 100, "vim"),
+        ];
+
+        let tree = ProcessTree::build(processes);
+
+        // target is lowercased in the search
+        assert!(tree.has_ancestor(200, "claude"));
+    }
+
+    #[test]
+    fn test_has_ancestor_cycle_protection() {
+        // Create a cycle: 100 -> 200 -> 100 (shouldn't happen but test protection)
+        let processes = vec![
+            create_process(100, 200, "bash"),
+            create_process(200, 100, "zsh"),
+        ];
+
+        let tree = ProcessTree::build(processes);
+
+        // Should not hang, should return false (claude not found)
+        assert!(!tree.has_ancestor(100, "claude"));
+    }
+
+    #[test]
+    fn test_has_ancestor_missing_parent() {
+        // Parent process doesn't exist in tree
+        let processes = vec![
+            create_process(200, 999, "vim"),  // 999 doesn't exist
+        ];
+
+        let tree = ProcessTree::build(processes);
+
+        // Should not crash, should return false
+        assert!(!tree.has_ancestor(200, "claude"));
+    }
+
+    #[test]
+    fn test_has_ancestor_root_process() {
+        // Process with ppid 0 (like init)
+        let processes = vec![
+            create_process(1, 0, "init"),
+        ];
+
+        let tree = ProcessTree::build(processes);
+
+        assert!(!tree.has_ancestor(1, "claude"));
+        assert!(tree.has_ancestor(1, "init"));
     }
 
     #[test]

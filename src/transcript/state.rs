@@ -219,6 +219,17 @@ pub fn detect_session_status_with_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn create_transcript(entries: &[&str]) -> NamedTempFile {
+        let mut file = NamedTempFile::new().unwrap();
+        for entry in entries {
+            writeln!(file, "{}", entry).unwrap();
+        }
+        file.flush().unwrap();
+        file
+    }
 
     #[test]
     fn test_session_status_display() {
@@ -240,5 +251,203 @@ mod tests {
         assert_eq!(SessionStatus::Processing.icon(), "●");
         assert_eq!(SessionStatus::Idle.icon(), "○");
         assert_eq!(SessionStatus::WaitingForUser { tools: vec![] }.icon(), "◐");
+    }
+
+    #[test]
+    fn test_detect_empty_file_returns_unknown() {
+        let file = NamedTempFile::new().unwrap();
+        let status = detect_session_status(file.path()).unwrap();
+        assert_eq!(status, SessionStatus::Unknown);
+    }
+
+    #[test]
+    fn test_detect_progress_returns_processing() {
+        let file = create_transcript(&[
+            r#"{"type":"progress","timestamp":"2026-01-23T16:29:06.719Z"}"#,
+        ]);
+        let status = detect_session_status(file.path()).unwrap();
+        assert_eq!(status, SessionStatus::Processing);
+    }
+
+    #[test]
+    fn test_detect_hook_progress_skipped_returns_ready() {
+        // hook_progress is internal, should be skipped and result in Ready if no other entries
+        let file = create_transcript(&[
+            r#"{"type":"progress","timestamp":"2026-01-23T16:29:06.719Z","data":{"type":"hook_progress"}}"#,
+        ]);
+        let status = detect_session_status(file.path()).unwrap();
+        assert_eq!(status, SessionStatus::Ready);
+    }
+
+    #[test]
+    fn test_detect_stop_hook_summary_returns_idle() {
+        let file = create_transcript(&[
+            r#"{"type":"system","subtype":"stop_hook_summary","timestamp":"2026-01-23T16:29:06.719Z"}"#,
+        ]);
+        let status = detect_session_status(file.path()).unwrap();
+        assert_eq!(status, SessionStatus::Idle);
+    }
+
+    #[test]
+    fn test_detect_turn_duration_returns_idle() {
+        let file = create_transcript(&[
+            r#"{"type":"system","subtype":"turn_duration","timestamp":"2026-01-23T16:29:06.719Z"}"#,
+        ]);
+        let status = detect_session_status(file.path()).unwrap();
+        assert_eq!(status, SessionStatus::Idle);
+    }
+
+    #[test]
+    fn test_detect_end_turn_returns_idle() {
+        let file = create_transcript(&[
+            r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"Done!"}]}}"#,
+        ]);
+        let status = detect_session_status(file.path()).unwrap();
+        assert_eq!(status, SessionStatus::Idle);
+    }
+
+    #[test]
+    fn test_detect_user_entry_returns_processing() {
+        // Use valid JSON format that parser can handle
+        let file = create_transcript(&[
+            r#"{"type":"user","timestamp":"2026-01-23T16:29:06.719Z"}"#,
+        ]);
+        let status = detect_session_status(file.path()).unwrap();
+        assert_eq!(status, SessionStatus::Processing);
+    }
+
+    #[test]
+    fn test_detect_tool_result_returns_processing() {
+        let file = create_transcript(&[
+            r#"{"type":"user","timestamp":"2026-01-23T16:29:06.719Z","message":{"content":[{"type":"tool_result","tool_use_id":"123"}]}}"#,
+        ]);
+        let status = detect_session_status(file.path()).unwrap();
+        assert_eq!(status, SessionStatus::Processing);
+    }
+
+    #[test]
+    fn test_detect_recent_tool_use_returns_processing() {
+        // Tool use with very recent timestamp should be Processing
+        let now = Utc::now();
+        let timestamp = now.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+        let entry = format!(
+            r#"{{"type":"assistant","timestamp":"{}","message":{{"stop_reason":"tool_use","content":[{{"type":"tool_use","name":"Bash"}}]}}}}"#,
+            timestamp
+        );
+        let file = create_transcript(&[&entry]);
+        let status = detect_session_status(file.path()).unwrap();
+        assert_eq!(status, SessionStatus::Processing);
+    }
+
+    #[test]
+    fn test_detect_old_tool_use_returns_waiting_for_user() {
+        // Tool use with old timestamp (> 10 seconds) should be WaitingForUser
+        let old_time = Utc::now() - chrono::Duration::seconds(15);
+        let timestamp = old_time.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+        let entry = format!(
+            r#"{{"type":"assistant","timestamp":"{}","message":{{"stop_reason":"tool_use","content":[{{"type":"tool_use","name":"AskUserQuestion"}}]}}}}"#,
+            timestamp
+        );
+        let file = create_transcript(&[&entry]);
+        let status = detect_session_status(file.path()).unwrap();
+        assert!(matches!(status, SessionStatus::WaitingForUser { tools } if tools == vec!["AskUserQuestion"]));
+    }
+
+    #[test]
+    fn test_detect_assistant_text_only_returns_idle() {
+        // Assistant with text only (no tool_use) means Claude finished responding
+        let file = create_transcript(&[
+            r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"Here is the answer"}]}}"#,
+        ]);
+        let status = detect_session_status(file.path()).unwrap();
+        assert_eq!(status, SessionStatus::Idle);
+    }
+
+    #[test]
+    fn test_detect_internal_entries_skipped() {
+        // file-history-snapshot should be skipped, and we should look at previous entry
+        let file = create_transcript(&[
+            r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"Done"}]}}"#,
+            r#"{"type":"file-history-snapshot","timestamp":"2026-01-23T16:29:07.719Z"}"#,
+        ]);
+        let status = detect_session_status(file.path()).unwrap();
+        assert_eq!(status, SessionStatus::Idle);
+    }
+
+    #[test]
+    fn test_detect_queue_operation_skipped() {
+        let file = create_transcript(&[
+            r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"Done"}]}}"#,
+            r#"{"type":"queue-operation","timestamp":"2026-01-23T16:29:07.719Z"}"#,
+        ]);
+        let status = detect_session_status(file.path()).unwrap();
+        assert_eq!(status, SessionStatus::Idle);
+    }
+
+    #[test]
+    fn test_detect_only_internal_entries_returns_ready() {
+        // If only internal entries exist, it's a fresh session
+        let file = create_transcript(&[
+            r#"{"type":"file-history-snapshot","timestamp":"2026-01-23T16:29:06.719Z"}"#,
+            r#"{"type":"queue-operation","timestamp":"2026-01-23T16:29:07.719Z"}"#,
+        ]);
+        let status = detect_session_status(file.path()).unwrap();
+        assert_eq!(status, SessionStatus::Ready);
+    }
+
+    #[test]
+    fn test_detect_assistant_without_tool_use_returns_idle() {
+        // Assistant without tool_use is considered Idle (even with stop_reason: null)
+        // This is because the current impl checks !is_tool_use() first
+        let file = create_transcript(&[
+            r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"stop_reason":null,"content":[]}}"#,
+        ]);
+        let status = detect_session_status(file.path()).unwrap();
+        assert_eq!(status, SessionStatus::Idle);
+    }
+
+    #[test]
+    fn test_detect_with_custom_timeout() {
+        // Tool use with 5 seconds old should be WaitingForUser with 3 second timeout
+        let old_time = Utc::now() - chrono::Duration::seconds(5);
+        let timestamp = old_time.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+        let entry = format!(
+            r#"{{"type":"assistant","timestamp":"{}","message":{{"stop_reason":"tool_use","content":[{{"type":"tool_use","name":"Bash"}}]}}}}"#,
+            timestamp
+        );
+        let file = create_transcript(&[&entry]);
+
+        let config = DetectionConfig {
+            waiting_timeout_secs: 3,
+        };
+        let status = detect_session_status_with_config(file.path(), &config).unwrap();
+        assert!(matches!(status, SessionStatus::WaitingForUser { tools } if tools == vec!["Bash"]));
+    }
+
+    #[test]
+    fn test_detect_complex_sequence_user_then_idle() {
+        // user -> progress -> turn_duration should be Idle
+        let file = create_transcript(&[
+            r#"{"type":"user","timestamp":"2026-01-23T16:29:00.000Z","message":{"content":"Hello"}}"#,
+            r#"{"type":"progress","timestamp":"2026-01-23T16:29:01.000Z"}"#,
+            r#"{"type":"assistant","timestamp":"2026-01-23T16:29:02.000Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"Hi!"}]}}"#,
+            r#"{"type":"system","subtype":"turn_duration","timestamp":"2026-01-23T16:29:03.000Z"}"#,
+        ]);
+        let status = detect_session_status(file.path()).unwrap();
+        assert_eq!(status, SessionStatus::Idle);
+    }
+
+    #[test]
+    fn test_detect_tool_use_with_null_stop_reason() {
+        // tool_use in content but stop_reason is null (waiting for approval)
+        let old_time = Utc::now() - chrono::Duration::seconds(15);
+        let timestamp = old_time.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+        let entry = format!(
+            r#"{{"type":"assistant","timestamp":"{}","message":{{"stop_reason":null,"content":[{{"type":"tool_use","name":"Edit"}}]}}}}"#,
+            timestamp
+        );
+        let file = create_transcript(&[&entry]);
+        let status = detect_session_status(file.path()).unwrap();
+        assert!(matches!(status, SessionStatus::WaitingForUser { tools } if tools == vec!["Edit"]));
     }
 }

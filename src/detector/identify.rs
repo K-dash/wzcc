@@ -125,6 +125,31 @@ mod tests {
     use super::*;
     use crate::datasource::SystemProcessDataSource;
 
+    fn create_pane(pane_id: u32, tty_name: Option<&str>) -> Pane {
+        Pane {
+            pane_id,
+            tab_id: 0,
+            window_id: 0,
+            workspace: "default".to_string(),
+            title: "test".to_string(),
+            cwd: Some("file:///Users/test/project".to_string()),
+            tty_name: tty_name.map(|s| s.to_string()),
+            is_active: false,
+            tab_title: None,
+            window_title: None,
+        }
+    }
+
+    fn create_process(pid: u32, ppid: u32, tty: Option<&str>, command: &str) -> ProcessInfo {
+        ProcessInfo {
+            pid,
+            ppid,
+            tty: tty.map(|s| s.to_string()),
+            command: command.to_string(),
+            args: None,
+        }
+    }
+
     #[test]
     fn test_is_claude_process() {
         let detector = ClaudeCodeDetector::new();
@@ -148,6 +173,139 @@ mod tests {
         };
 
         assert!(!detector.is_claude_process(&bash_proc));
+    }
+
+    #[test]
+    fn test_is_claude_process_with_args() {
+        let detector = ClaudeCodeDetector::new();
+
+        // claude in args but not in command
+        let proc = ProcessInfo {
+            pid: 123,
+            ppid: 1,
+            tty: Some("ttys001".to_string()),
+            command: "node".to_string(),
+            args: Some("/path/to/claude code".to_string()),
+        };
+
+        assert!(detector.is_claude_process(&proc));
+    }
+
+    #[test]
+    fn test_is_claude_process_case_insensitive() {
+        let detector = ClaudeCodeDetector::new();
+
+        let proc = ProcessInfo {
+            pid: 123,
+            ppid: 1,
+            tty: Some("ttys001".to_string()),
+            command: "CLAUDE".to_string(),
+            args: None,
+        };
+
+        assert!(detector.is_claude_process(&proc));
+    }
+
+    #[test]
+    fn test_detect_direct_tty_match() {
+        let detector = ClaudeCodeDetector::new();
+        let pane = create_pane(1, Some("/dev/ttys001"));
+
+        let processes = vec![
+            create_process(100, 1, Some("ttys001"), "claude"),
+        ];
+        let tree = ProcessTree::build(processes);
+
+        let result = detector.detect_by_tty_with_tree(&pane, &tree).unwrap();
+        assert!(matches!(result, Some(DetectionReason::DirectTtyMatch { .. })));
+    }
+
+    #[test]
+    fn test_detect_no_match_different_tty() {
+        let detector = ClaudeCodeDetector::new();
+        let pane = create_pane(1, Some("/dev/ttys001"));
+
+        let processes = vec![
+            create_process(100, 1, Some("ttys002"), "claude"),
+        ];
+        let tree = ProcessTree::build(processes);
+
+        let result = detector.detect_by_tty_with_tree(&pane, &tree).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_detect_no_match_not_claude() {
+        let detector = ClaudeCodeDetector::new();
+        let pane = create_pane(1, Some("/dev/ttys001"));
+
+        let processes = vec![
+            create_process(100, 1, Some("ttys001"), "bash"),
+        ];
+        let tree = ProcessTree::build(processes);
+
+        let result = detector.detect_by_tty_with_tree(&pane, &tree).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_detect_wrapper_detected() {
+        let detector = ClaudeCodeDetector::new();
+        let pane = create_pane(1, Some("/dev/ttys001"));
+
+        // bash -> shell -> claude (ancestor)
+        // TTY matches on shell process, but claude is ancestor
+        let processes = vec![
+            create_process(100, 1, None, "claude"),      // ancestor
+            create_process(200, 100, Some("ttys001"), "shell"),  // child with matching TTY
+        ];
+        let tree = ProcessTree::build(processes);
+
+        let result = detector.detect_by_tty_with_tree(&pane, &tree).unwrap();
+        assert!(matches!(result, Some(DetectionReason::WrapperDetected { .. })));
+    }
+
+    #[test]
+    fn test_detect_pane_without_tty() {
+        let detector = ClaudeCodeDetector::new();
+        let pane = create_pane(1, None);  // No TTY
+
+        let processes = vec![
+            create_process(100, 1, Some("ttys001"), "claude"),
+        ];
+        let tree = ProcessTree::build(processes);
+
+        let result = detector.detect_by_tty_with_tree(&pane, &tree).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_detect_process_without_tty() {
+        let detector = ClaudeCodeDetector::new();
+        let pane = create_pane(1, Some("/dev/ttys001"));
+
+        let processes = vec![
+            create_process(100, 1, None, "claude"),  // No TTY
+        ];
+        let tree = ProcessTree::build(processes);
+
+        let result = detector.detect_by_tty_with_tree(&pane, &tree).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_detect_custom_allowlist() {
+        let detector = ClaudeCodeDetector::new()
+            .with_process_names(vec!["myapp".to_string()]);
+        let pane = create_pane(1, Some("/dev/ttys001"));
+
+        let processes = vec![
+            create_process(100, 1, Some("ttys001"), "myapp"),
+        ];
+        let tree = ProcessTree::build(processes);
+
+        let result = detector.detect_by_tty_with_tree(&pane, &tree).unwrap();
+        assert!(matches!(result, Some(DetectionReason::DirectTtyMatch { .. })));
     }
 
     #[test]
