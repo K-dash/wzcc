@@ -5,6 +5,7 @@ use crate::models::Pane;
 use crate::transcript::{get_transcript_dir, get_latest_transcript, detect_session_status, SessionStatus, get_last_assistant_text};
 use anyhow::Result;
 use crossterm::{
+    event::KeyCode,
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -53,6 +54,8 @@ pub struct App {
     refreshing: bool,
     /// フル再描画が必要か（選択変更時などに差分描画の残像を防ぐ）
     needs_full_redraw: bool,
+    /// 'g' キーが押された状態（gg シーケンス用）
+    pending_g: bool,
 }
 
 impl Default for App {
@@ -75,6 +78,7 @@ impl App {
             dirty: true,
             refreshing: false,
             needs_full_redraw: true,
+            pending_g: false,
         }
     }
 
@@ -141,6 +145,13 @@ impl App {
                 }
             }
         }
+
+        // cwd でグループ化（ソート）
+        self.sessions.sort_by(|a, b| {
+            let cwd_a = a.pane.cwd_path().unwrap_or_default();
+            let cwd_b = b.pane.cwd_path().unwrap_or_default();
+            cwd_a.cmp(&cwd_b).then(a.pane.pane_id.cmp(&b.pane.pane_id))
+        });
 
         // 選択位置を維持（同じ pane_id があれば選択し直す）
         if !self.sessions.is_empty() {
@@ -244,6 +255,24 @@ impl App {
         self.needs_full_redraw = true;
     }
 
+    /// 先頭のアイテムを選択 (gg)
+    pub fn select_first(&mut self) {
+        if !self.sessions.is_empty() {
+            self.list_state.select(Some(0));
+            self.dirty = true;
+            self.needs_full_redraw = true;
+        }
+    }
+
+    /// 末尾のアイテムを選択 (G)
+    pub fn select_last(&mut self) {
+        if !self.sessions.is_empty() {
+            self.list_state.select(Some(self.sessions.len() - 1));
+            self.dirty = true;
+            self.needs_full_redraw = true;
+        }
+    }
+
     /// 選択中のセッションにジャンプ
     pub fn jump_to_selected(&mut self) -> Result<()> {
         if let Some(i) = self.list_state.selected() {
@@ -289,12 +318,29 @@ impl App {
             // イベント処理
             match event_handler.next()? {
                 Event::Key(key) => {
+                    // gg シーケンスの処理
+                    if self.pending_g {
+                        self.pending_g = false;
+                        if key.code == KeyCode::Char('g') {
+                            // gg → 先頭へ
+                            self.select_first();
+                            continue;
+                        }
+                        // g の後に別のキーが来たら pending をリセットして通常処理
+                    }
+
                     if is_quit_key(&key) {
                         break Ok(());
                     } else if is_down_key(&key) {
                         self.select_next();
                     } else if is_up_key(&key) {
                         self.select_previous();
+                    } else if key.code == KeyCode::Char('g') {
+                        // 最初の g → pending 状態に
+                        self.pending_g = true;
+                    } else if key.code == KeyCode::Char('G') {
+                        // G → 末尾へ
+                        self.select_last();
                     } else if is_enter_key(&key) {
                         // ジャンプを試みる（TUI は継続）
                         let _ = self.jump_to_selected();
@@ -347,48 +393,111 @@ impl App {
 
     /// リスト描画
     fn render_list(&mut self, f: &mut ratatui::Frame, area: Rect) {
-        let items: Vec<ListItem> = self
-            .sessions
-            .iter()
-            .map(|session| {
-                let pane = &session.pane;
+        // グループ色のパレット
+        const GROUP_COLORS: [Color; 6] = [
+            Color::Blue,
+            Color::Green,
+            Color::Yellow,
+            Color::Magenta,
+            Color::Cyan,
+            Color::Red,
+        ];
 
-                // 状態アイコンと色
-                let (status_icon, status_color) = match &session.status {
-                    SessionStatus::Processing => ("●", Color::Yellow),
-                    SessionStatus::Idle => ("○", Color::Green),
-                    SessionStatus::WaitingForUser { .. } => ("◐", Color::Magenta),
-                    SessionStatus::Unknown => ("?", Color::DarkGray),
-                };
+        // cwd ごとのセッション数とグループ色をマッピング
+        let mut cwd_info: std::collections::HashMap<String, (usize, Color)> = std::collections::HashMap::new();
+        let mut color_index = 0;
+        for session in &self.sessions {
+            if let Some(cwd) = session.pane.cwd_path() {
+                cwd_info.entry(cwd).or_insert_with(|| {
+                    let color = GROUP_COLORS[color_index % GROUP_COLORS.len()];
+                    color_index += 1;
+                    (0, color)
+                }).0 += 1;
+            }
+        }
 
-                // タイトル (最大40文字)
-                let title = if pane.title.len() > 40 {
-                    format!("{}...", &pane.title[..37])
-                } else {
-                    pane.title.clone()
-                };
+        // リストアイテムを構築（ヘッダー + セッション）
+        let mut items: Vec<ListItem> = Vec::new();
+        let mut session_indices: Vec<usize> = Vec::new(); // ListItem index → session index マッピング
+        let mut current_cwd: Option<String> = None;
 
-                let line = Line::from(vec![
-                    Span::styled(
-                        format!("{} ", status_icon),
-                        Style::default()
-                            .fg(status_color)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        format!("Pane {}: ", pane.pane_id),
-                        Style::default().fg(Color::Cyan),
-                    ),
-                    Span::raw(title),
-                    Span::styled(
-                        format!(" [{}]", session.status.as_str()),
-                        Style::default().fg(status_color),
-                    ),
-                ]);
+        for (session_idx, session) in self.sessions.iter().enumerate() {
+            let pane = &session.pane;
+            let cwd = pane.cwd_path().unwrap_or_default();
 
-                ListItem::new(line)
-            })
-            .collect();
+            // グループ情報を取得
+            let (count, group_color) = cwd_info.get(&cwd).copied().unwrap_or((1, Color::White));
+
+            // 新しいグループの場合はヘッダーを追加（2つ以上のセッションがある場合のみ）
+            if current_cwd.as_ref() != Some(&cwd) {
+                current_cwd = Some(cwd.clone());
+
+                if count > 1 {
+                    // cwd の末尾ディレクトリ名を取得
+                    let dir_name = std::path::Path::new(&cwd)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(&cwd);
+
+                    let header_line = Line::from(vec![
+                        Span::styled(
+                            format!("┌─ {} ({} sessions) ", dir_name, count),
+                            Style::default().fg(group_color).add_modifier(Modifier::BOLD),
+                        ),
+                    ]);
+                    items.push(ListItem::new(header_line));
+                    session_indices.push(usize::MAX); // ヘッダーはセッションじゃない
+                }
+            }
+
+            // 状態アイコンと色
+            let (status_icon, status_color) = match &session.status {
+                SessionStatus::Processing => ("●", Color::Yellow),
+                SessionStatus::Idle => ("○", Color::Green),
+                SessionStatus::WaitingForUser { .. } => ("◐", Color::Magenta),
+                SessionStatus::Unknown => ("?", Color::DarkGray),
+            };
+
+            // タイトル (最大35文字)
+            let title = if pane.title.len() > 35 {
+                format!("{}...", &pane.title[..32])
+            } else {
+                pane.title.clone()
+            };
+
+            // インデント（グループ内のセッションは少しインデント）
+            let indent = if count > 1 { "│ " } else { "" };
+
+            let line = Line::from(vec![
+                Span::styled(indent, Style::default().fg(group_color)),
+                Span::styled(
+                    format!("{} ", status_icon),
+                    Style::default()
+                        .fg(status_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("Pane {}: ", pane.pane_id),
+                    Style::default().fg(Color::Cyan),
+                ),
+                Span::raw(title),
+                Span::styled(
+                    format!(" [{}]", session.status.as_str()),
+                    Style::default().fg(status_color),
+                ),
+            ]);
+
+            items.push(ListItem::new(line));
+            session_indices.push(session_idx);
+        }
+
+        // list_state のインデックスを ListItem のインデックスに変換
+        let list_index = self.list_state.selected().and_then(|session_idx| {
+            session_indices.iter().position(|&idx| idx == session_idx)
+        });
+
+        let mut list_state = ListState::default();
+        list_state.select(list_index);
 
         // タイトル（リフレッシュ中はインジケータ表示）
         let title = if self.refreshing {
@@ -410,7 +519,7 @@ impl App {
             )
             .highlight_symbol(">> ");
 
-        f.render_stateful_widget(list, area, &mut self.list_state);
+        f.render_stateful_widget(list, area, &mut list_state);
     }
 
     /// 詳細描画
