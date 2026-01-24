@@ -56,6 +56,8 @@ pub struct App {
     needs_full_redraw: bool,
     /// 'g' キーが押された状態（gg シーケンス用）
     pending_g: bool,
+    /// 前回の last_output のスナップショット（変更検出用）
+    prev_last_outputs: Vec<Option<String>>,
 }
 
 impl Default for App {
@@ -79,6 +81,7 @@ impl App {
             refreshing: false,
             needs_full_redraw: true,
             pending_g: false,
+            prev_last_outputs: Vec::new(),
         }
     }
 
@@ -359,8 +362,18 @@ impl App {
                 Event::Tick => {
                     // 3秒ごとに自動リフレッシュ（インジケータなし）
                     self.refresh()?;
-                    // last_output が変わると残像が出る可能性があるのでフル再描画
-                    self.needs_full_redraw = true;
+
+                    // last_output が変わった場合のみフル再描画（チラつき防止）
+                    let current_outputs: Vec<Option<String>> = self
+                        .sessions
+                        .iter()
+                        .map(|s| s.last_output.clone())
+                        .collect();
+
+                    if current_outputs != self.prev_last_outputs {
+                        self.needs_full_redraw = true;
+                        self.prev_last_outputs = current_outputs;
+                    }
                 }
             }
         };
