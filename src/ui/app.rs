@@ -10,7 +10,7 @@ use crate::transcript::{
 };
 use anyhow::Result;
 use crossterm::{
-    event::KeyCode,
+    event::{DisableMouseCapture, EnableMouseCapture, KeyCode, MouseButton, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -65,6 +65,10 @@ pub struct App {
     pending_g: bool,
     /// 前回の last_output のスナップショット（変更検出用）
     prev_last_outputs: Vec<Option<String>>,
+    /// 最後のクリック時刻とインデックス（ダブルクリック判定用）
+    last_click: Option<(std::time::Instant, usize)>,
+    /// リストエリアの Rect（クリック位置計算用）
+    list_area: Option<Rect>,
 }
 
 impl Default for App {
@@ -89,6 +93,8 @@ impl App {
             needs_full_redraw: true,
             pending_g: false,
             prev_last_outputs: Vec::new(),
+            last_click: None,
+            list_area: None,
         }
     }
 
@@ -307,12 +313,55 @@ impl App {
         Ok(())
     }
 
+    /// リスト表示行からセッションインデックスを計算
+    /// グループヘッダーを考慮して、クリックされた行が対応するセッションを返す
+    fn row_to_session_index(&self, row: usize) -> Option<usize> {
+        // cwd ごとのセッション数をカウント
+        let mut cwd_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for session in &self.sessions {
+            if let Some(cwd) = session.pane.cwd_path() {
+                *cwd_counts.entry(cwd).or_insert(0) += 1;
+            }
+        }
+
+        // 行番号からセッションインデックスをマッピング
+        let mut current_row = 0;
+        let mut current_cwd: Option<String> = None;
+
+        for (session_idx, session) in self.sessions.iter().enumerate() {
+            let cwd = session.pane.cwd_path().unwrap_or_default();
+            let count = cwd_counts.get(&cwd).copied().unwrap_or(1);
+
+            // 新しいグループの場合はヘッダー行を追加（2つ以上のセッションがある場合のみ）
+            if current_cwd.as_ref() != Some(&cwd) {
+                current_cwd = Some(cwd.clone());
+                if count > 1 {
+                    // ヘッダー行
+                    if current_row == row {
+                        // ヘッダークリックは無視（セッションじゃない）
+                        return None;
+                    }
+                    current_row += 1;
+                }
+            }
+
+            // セッション行
+            if current_row == row {
+                return Some(session_idx);
+            }
+            current_row += 1;
+        }
+
+        None
+    }
+
     /// TUI を実行
     pub fn run(&mut self) -> Result<()> {
         // ターミナルをセットアップ
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen)?;
+        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
@@ -373,6 +422,49 @@ impl App {
                         self.refreshing = false;
                     }
                 }
+                Event::Mouse(mouse) => {
+                    // 左クリックのみ処理
+                    if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
+                        // リストエリア内のクリックかチェック
+                        if let Some(area) = self.list_area {
+                            if mouse.column >= area.x
+                                && mouse.column < area.x + area.width
+                                && mouse.row >= area.y
+                                && mouse.row < area.y + area.height
+                            {
+                                // ボーダーとタイトル（1行目）を除いた相対行
+                                let relative_row = mouse.row.saturating_sub(area.y + 1);
+
+                                // クリックされたセッションインデックスを計算
+                                if let Some(idx) = self.row_to_session_index(relative_row as usize)
+                                {
+                                    let now = std::time::Instant::now();
+
+                                    // ダブルクリック判定（300ms以内に同じアイテムをクリック）
+                                    let is_double_click = self
+                                        .last_click
+                                        .map(|(time, last_idx)| {
+                                            last_idx == idx
+                                                && now.duration_since(time).as_millis() < 300
+                                        })
+                                        .unwrap_or(false);
+
+                                    if is_double_click {
+                                        // ダブルクリック → ジャンプ
+                                        self.list_state.select(Some(idx));
+                                        let _ = self.jump_to_selected();
+                                        self.last_click = None;
+                                    } else {
+                                        // シングルクリック → 選択
+                                        self.list_state.select(Some(idx));
+                                        self.dirty = true;
+                                        self.last_click = Some((now, idx));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 Event::Resize(_, _) => {
                     self.dirty = true;
                 }
@@ -397,7 +489,11 @@ impl App {
 
         // ターミナルをクリーンアップ
         disable_raw_mode()?;
-        execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+        execute!(
+            terminal.backend_mut(),
+            LeaveAlternateScreen,
+            DisableMouseCapture
+        )?;
         terminal.show_cursor()?;
 
         result
@@ -423,6 +519,9 @@ impl App {
 
     /// リスト描画
     fn render_list(&mut self, f: &mut ratatui::Frame, area: Rect) {
+        // クリック位置計算用にエリアを保存
+        self.list_area = Some(area);
+
         // グループ色のパレット
         const GROUP_COLORS: [Color; 6] = [
             Color::Blue,

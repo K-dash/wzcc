@@ -1,5 +1,7 @@
 use anyhow::Result;
-use crossterm::event::{self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{
+    self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind,
+};
 use std::time::Duration;
 
 /// TUI イベント
@@ -7,6 +9,8 @@ use std::time::Duration;
 pub enum Event {
     /// キー入力
     Key(KeyEvent),
+    /// マウス入力
+    Mouse(MouseEvent),
     /// Tick (定期更新)
     Tick,
     /// リサイズ
@@ -32,6 +36,7 @@ impl EventHandler {
         if event::poll(self.tick_rate)? {
             match event::read()? {
                 CrosstermEvent::Key(key) => Ok(Event::Key(key)),
+                CrosstermEvent::Mouse(mouse) => Ok(Event::Mouse(mouse)),
                 CrosstermEvent::Resize(w, h) => Ok(Event::Resize(w, h)),
                 _ => Ok(Event::Tick),
             }
@@ -40,6 +45,17 @@ impl EventHandler {
             Ok(Event::Tick)
         }
     }
+}
+
+/// マウスイベントがシングルクリックかどうか
+pub fn is_mouse_click(mouse: &MouseEvent) -> bool {
+    matches!(mouse.kind, MouseEventKind::Down(_))
+}
+
+/// マウスイベントがダブルクリックかどうか（crossterm はダブルクリックを直接サポートしてないので時間で判定）
+pub fn is_mouse_double_click(mouse: &MouseEvent) -> bool {
+    // Note: ダブルクリック判定は App 側で時間計測して行う
+    matches!(mouse.kind, MouseEventKind::Down(_))
 }
 
 /// キーイベントのヘルパー
