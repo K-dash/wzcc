@@ -233,7 +233,6 @@ impl App {
 
         self.list_state.select(Some(i));
         self.dirty = true;
-        self.needs_full_redraw = true;
     }
 
     /// 前のアイテムを選択
@@ -255,7 +254,6 @@ impl App {
 
         self.list_state.select(Some(i));
         self.dirty = true;
-        self.needs_full_redraw = true;
     }
 
     /// 先頭のアイテムを選択 (gg)
@@ -263,7 +261,6 @@ impl App {
         if !self.sessions.is_empty() {
             self.list_state.select(Some(0));
             self.dirty = true;
-            self.needs_full_redraw = true;
         }
     }
 
@@ -272,7 +269,6 @@ impl App {
         if !self.sessions.is_empty() {
             self.list_state.select(Some(self.sessions.len() - 1));
             self.dirty = true;
-            self.needs_full_redraw = true;
         }
     }
 
@@ -652,9 +648,6 @@ impl App {
         } else {
             vec![Line::from("No sessions")]
         };
-
-        // Clear the entire area first to avoid remnants from previous content
-        f.render_widget(ratatui::widgets::Clear, area);
 
         let paragraph = Paragraph::new(text)
             .block(Block::default().borders(Borders::ALL).title(" Details "))
