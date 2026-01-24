@@ -566,8 +566,9 @@ impl App {
             };
 
             // タイトル (最大35文字)
-            let title = if pane.title.len() > 35 {
-                format!("{}...", &pane.title[..32])
+            let title = if pane.title.chars().count() > 35 {
+                let truncated: String = pane.title.chars().take(32).collect();
+                format!("{}...", truncated)
             } else {
                 pane.title.clone()
             };
