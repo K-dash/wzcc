@@ -160,11 +160,11 @@ wzcc --version
 
 ```mermaid
 flowchart TD
-    A[User Input] -->|keyboard/mouse events| B[Session Detection]
+    A[User Input] -->|keyboard/mouse events| B
 
-    B --> C[Session Information Enrichment]
+    B --> C
 
-    C --> D[TUI Rendering]
+    C --> D
 
     D -->|Enter key| E[Action Execution]
     D -->|j/k/↑/↓| D
@@ -172,21 +172,24 @@ flowchart TD
     E -->|activate pane| F[WezTerm Pane]
     E -->|TUI continues| D
 
-    subgraph B[Session Detection]
+    subgraph B [Session Detection]
+        direction TB
         B1[Fetch panes from WezTerm CLI]
         B2[Build process tree from ps]
         B3[Match pane TTY → process TTY]
         B4[Check allowlist & wrapper detection]
     end
 
-    subgraph C[Session Information Enrichment]
+    subgraph C [Session Info Enrichment]
+        direction TB
         C1[Extract git branch from CWD]
         C2[Parse transcript files]
         C3[Determine session status]
         C4[Extract last prompt & response]
     end
 
-    subgraph D[TUI Rendering]
+    subgraph D [TUI Rendering]
+        direction TB
         D1[Render session list with status]
         D2[Display selected session details]
         D3[Reactive rendering on state change]
