@@ -8,6 +8,8 @@ use std::path::Path;
 /// The detected status of a Claude Code session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionStatus {
+    /// Claude Code is running but no session started yet (waiting for first input)
+    Ready,
     /// Claude is actively processing (streaming, executing tools, etc.)
     Processing,
     /// Claude is idle, waiting for user input
@@ -23,6 +25,7 @@ impl SessionStatus {
     /// Get a short display string for the status.
     pub fn as_str(&self) -> &'static str {
         match self {
+            SessionStatus::Ready => "Ready",
             SessionStatus::Processing => "Processing",
             SessionStatus::Idle => "Idle",
             SessionStatus::WaitingForUser { .. } => "Waiting",
@@ -33,6 +36,7 @@ impl SessionStatus {
     /// Get an icon for the status.
     pub fn icon(&self) -> &'static str {
         match self {
+            SessionStatus::Ready => "◇",
             SessionStatus::Processing => "●",
             SessionStatus::Idle => "○",
             SessionStatus::WaitingForUser { .. } => "◐",
@@ -168,6 +172,7 @@ mod tests {
 
     #[test]
     fn test_session_status_display() {
+        assert_eq!(SessionStatus::Ready.as_str(), "Ready");
         assert_eq!(SessionStatus::Processing.as_str(), "Processing");
         assert_eq!(SessionStatus::Idle.as_str(), "Idle");
         assert_eq!(
@@ -181,6 +186,7 @@ mod tests {
 
     #[test]
     fn test_session_status_icon() {
+        assert_eq!(SessionStatus::Ready.icon(), "◇");
         assert_eq!(SessionStatus::Processing.icon(), "●");
         assert_eq!(SessionStatus::Idle.icon(), "○");
         assert_eq!(SessionStatus::WaitingForUser { tools: vec![] }.icon(), "◐");

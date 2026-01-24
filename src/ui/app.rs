@@ -202,12 +202,14 @@ impl App {
 
         let dir = match get_transcript_dir(&cwd) {
             Some(dir) => dir,
-            None => return (SessionStatus::Unknown, None, None),
+            // No transcript directory = Claude Code is running but no session yet
+            None => return (SessionStatus::Ready, None, None),
         };
 
         let transcript_path = match get_latest_transcript(&dir) {
             Ok(Some(path)) => path,
-            _ => return (SessionStatus::Unknown, None, None),
+            // No transcript file = Claude Code is running but no session yet
+            _ => return (SessionStatus::Ready, None, None),
         };
 
         let status = detect_session_status(&transcript_path).unwrap_or(SessionStatus::Unknown);
@@ -585,6 +587,7 @@ impl App {
 
             // 状態アイコンと色
             let (status_icon, status_color) = match &session.status {
+                SessionStatus::Ready => ("◇", Color::Cyan),
                 SessionStatus::Processing => ("●", Color::Yellow),
                 SessionStatus::Idle => ("○", Color::Green),
                 SessionStatus::WaitingForUser { .. } => ("◐", Color::Magenta),
@@ -683,6 +686,7 @@ impl App {
                 // Phase 3: セッション状態を表示
                 lines.push(Line::from(""));
                 let (status_color, status_text) = match &session.status {
+                    SessionStatus::Ready => (Color::Cyan, "Ready"),
                     SessionStatus::Processing => (Color::Yellow, "Processing"),
                     SessionStatus::Idle => (Color::Green, "Idle"),
                     SessionStatus::WaitingForUser { tools } => {
