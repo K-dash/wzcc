@@ -512,30 +512,12 @@ impl App {
         // クリック位置計算用にエリアを保存
         self.list_area = Some(area);
 
-        // グループ色のパレット
-        const GROUP_COLORS: [Color; 6] = [
-            Color::Blue,
-            Color::Green,
-            Color::Yellow,
-            Color::Magenta,
-            Color::Cyan,
-            Color::Red,
-        ];
-
-        // cwd ごとのセッション数とグループ色をマッピング
-        let mut cwd_info: std::collections::HashMap<String, (usize, Color)> =
+        // cwd ごとのセッション数をカウント
+        let mut cwd_info: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
-        let mut color_index = 0;
         for session in &self.sessions {
             if let Some(cwd) = session.pane.cwd_path() {
-                cwd_info
-                    .entry(cwd)
-                    .or_insert_with(|| {
-                        let color = GROUP_COLORS[color_index % GROUP_COLORS.len()];
-                        color_index += 1;
-                        (0, color)
-                    })
-                    .0 += 1;
+                *cwd_info.entry(cwd).or_insert(0) += 1;
             }
         }
 
@@ -549,7 +531,7 @@ impl App {
             let cwd = pane.cwd_path().unwrap_or_default();
 
             // グループ情報を取得
-            let (count, group_color) = cwd_info.get(&cwd).copied().unwrap_or((1, Color::White));
+            let count = cwd_info.get(&cwd).copied().unwrap_or(1);
 
             // 新しい CWD の場合はヘッダーを追加
             if current_cwd.as_ref() != Some(&cwd) {
@@ -559,21 +541,17 @@ impl App {
                 let dir_name = std::path::Path::new(&cwd)
                     .file_name()
                     .and_then(|n| n.to_str())
-                    .unwrap_or(&cwd);
+                    .unwrap_or(&cwd)
+                    .to_string();
 
                 // 複数セッションの場合はセッション数も表示
                 let header_text = if count > 1 {
-                    format!("┌─ {} ({} sessions) ", dir_name, count)
+                    format!("📂 {} ({} sessions)", dir_name, count)
                 } else {
-                    format!("┌─ {} ", dir_name)
+                    format!("📂 {}", dir_name)
                 };
 
-                let header_line = Line::from(vec![Span::styled(
-                    header_text,
-                    Style::default()
-                        .fg(group_color)
-                        .add_modifier(Modifier::BOLD),
-                )]);
+                let header_line = Line::from(vec![Span::raw(header_text)]);
                 items.push(ListItem::new(header_line));
                 session_indices.push(usize::MAX); // ヘッダーはセッションじゃない
             }
@@ -595,10 +573,8 @@ impl App {
             };
 
             // インデント（すべてのセッションにインデント）
-            let indent = "│ ";
-
             let line = Line::from(vec![
-                Span::styled(indent, Style::default().fg(group_color)),
+                Span::raw("  "),
                 Span::styled(
                     format!("{} ", status_icon),
                     Style::default()
