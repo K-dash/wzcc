@@ -27,7 +27,7 @@ pub async fn run() -> Result<()> {
 
     let mut sessions: HashMap<u32, SessionInfo> = HashMap::new();
 
-    // 3秒ごとにポーリング
+    // Poll every 3 seconds
     let mut ticker = interval(Duration::from_secs(3));
 
     println!("Daemon started. Monitoring Claude Code sessions...");
@@ -36,7 +36,7 @@ pub async fn run() -> Result<()> {
     loop {
         ticker.tick().await;
 
-        // 現在の workspace を取得
+        // Get current workspace
         let current_workspace = match pane_ds.get_current_workspace() {
             Ok(ws) => ws,
             Err(e) => {
@@ -45,7 +45,7 @@ pub async fn run() -> Result<()> {
             }
         };
 
-        // Pane 一覧を取得
+        // Get pane list
         let panes = match pane_ds.list_panes() {
             Ok(p) => p,
             Err(e) => {
@@ -54,16 +54,16 @@ pub async fn run() -> Result<()> {
             }
         };
 
-        // 現在のセッションを追跡
+        // Track current sessions
         let mut current_pane_ids: Vec<u32> = Vec::new();
 
         for pane in panes {
-            // 現在の workspace のみ対象
+            // Only target current workspace
             if pane.workspace != current_workspace {
                 continue;
             }
 
-            // Claude Code 検出
+            // Detect Claude Code
             let is_claude = detector
                 .detect_by_tty(&pane, &process_ds)
                 .ok()
@@ -71,7 +71,7 @@ pub async fn run() -> Result<()> {
                 .is_some();
 
             if !is_claude {
-                // Claude Code じゃなくなった場合、タイトルを元に戻す
+                // If no longer Claude Code, restore original title
                 if let Some(info) = sessions.remove(&pane.pane_id) {
                     let _ = WeztermCli::set_tab_title(pane.pane_id, &info.original_title);
                     println!(
@@ -84,17 +84,17 @@ pub async fn run() -> Result<()> {
 
             current_pane_ids.push(pane.pane_id);
 
-            // セッション状態を取得
+            // Get session status
             let status = detect_status_for_pane(&pane);
 
-            // 既存のセッションか確認
+            // Check if existing session
             if let Some(info) = sessions.get_mut(&pane.pane_id) {
-                // 状態が変わった場合のみ更新
+                // Update only when status changes
                 if info.status != status {
                     let old_status = info.status.clone();
                     info.status = status.clone();
 
-                    // タブタイトルを更新
+                    // Update tab title
                     let new_title = format_title(&info.original_title, &status);
                     if let Err(e) = WeztermCli::set_tab_title(pane.pane_id, &new_title) {
                         eprintln!("Failed to set tab title: {}", e);
@@ -106,7 +106,7 @@ pub async fn run() -> Result<()> {
                     }
                 }
             } else {
-                // 新しいセッション
+                // New session
                 let original_title = pane.title.clone();
                 let new_title = format_title(&original_title, &status);
 
@@ -130,7 +130,7 @@ pub async fn run() -> Result<()> {
             }
         }
 
-        // 消えたセッションを削除（タイトルを元に戻す）
+        // Remove closed sessions (restore title)
         let gone_pane_ids: Vec<u32> = sessions
             .keys()
             .filter(|id| !current_pane_ids.contains(id))
@@ -139,7 +139,7 @@ pub async fn run() -> Result<()> {
 
         for pane_id in gone_pane_ids {
             if let Some(info) = sessions.remove(&pane_id) {
-                // Pane が消えた場合はタイトル復元を試みない（エラーになる）
+                // Don't try to restore title when pane is gone (will error)
                 println!("Pane {} closed", pane_id);
                 let _ = info; // suppress unused warning
             }
@@ -147,7 +147,7 @@ pub async fn run() -> Result<()> {
     }
 }
 
-/// Pane の cwd からトランスクリプトを読んで状態を検出
+/// Detect status by reading transcript from pane's cwd
 fn detect_status_for_pane(pane: &Pane) -> SessionStatus {
     let cwd = match pane.cwd_path() {
         Some(cwd) => cwd,
@@ -167,7 +167,7 @@ fn detect_status_for_pane(pane: &Pane) -> SessionStatus {
     detect_session_status(&transcript_path).unwrap_or(SessionStatus::Unknown)
 }
 
-/// タイトルにステータスアイコンを付加
+/// Add status icon to title
 fn format_title(original_title: &str, status: &SessionStatus) -> String {
     let icon = status.icon();
     format!("{} {}", icon, original_title)

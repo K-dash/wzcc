@@ -52,7 +52,7 @@ pub fn wrap_text_lines(text: &str, width: usize, max_lines: usize, color: Color)
     lines
 }
 
-/// Claude Code セッション情報
+/// Claude Code session information
 #[derive(Debug, Clone)]
 pub struct ClaudeSession {
     pub pane: Pane,
@@ -70,7 +70,7 @@ pub struct ClaudeSession {
 }
 
 impl ClaudeSession {
-    /// Pane の cwd からトランスクリプトを読んで状態、最終プロンプト、最終出力を検出
+    /// Detect session status, last prompt, and last output from pane's cwd transcript
     pub fn detect_status_and_output(pane: &Pane) -> (SessionStatus, Option<String>, Option<String>) {
         let cwd = match pane.cwd_path() {
             Some(cwd) => cwd,
@@ -102,7 +102,7 @@ impl ClaudeSession {
         (status, last_prompt, last_output)
     }
 
-    /// cwd から git branch を取得
+    /// Get git branch from cwd
     pub fn get_git_branch(cwd: &str) -> Option<String> {
         use std::process::Command;
 

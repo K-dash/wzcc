@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// wezterm pane の情報
+/// Wezterm pane information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Pane {
     pub pane_id: u32,
@@ -16,14 +16,14 @@ pub struct Pane {
 }
 
 impl Pane {
-    /// CWD から `file://` プレフィックスを除去
+    /// Remove `file://` prefix from CWD
     pub fn cwd_path(&self) -> Option<String> {
         self.cwd
             .as_ref()
             .and_then(|cwd| cwd.strip_prefix("file://").map(|s| s.to_string()))
     }
 
-    /// TTY 名から `/dev/` プレフィックスを除去 (ps aux との突合用)
+    /// Remove `/dev/` prefix from TTY name (for matching with ps aux)
     pub fn tty_short(&self) -> Option<String> {
         self.tty_name
             .as_ref()

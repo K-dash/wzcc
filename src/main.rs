@@ -37,10 +37,10 @@ fn main() -> Result<()> {
 fn run_daemon() -> Result<()> {
     println!("Starting wzcc daemon...");
 
-    // TODO: 実装
-    // 1. 現在の workspace の Claude Code セッションを検出
-    // 2. トランスクリプトファイルを監視
-    // 3. ステータス変化時にタブ名を変更
+    // TODO: Implementation
+    // 1. Detect Claude Code sessions in current workspace
+    // 2. Watch transcript files
+    // 3. Change tab name on status change
 
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async { wzcc::daemon::run().await })

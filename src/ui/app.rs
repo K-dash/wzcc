@@ -23,29 +23,29 @@ use super::event::{
 use super::render::{render_details, render_list};
 use super::session::ClaudeSession;
 
-/// TUI アプリケーション
+/// TUI application
 pub struct App {
-    /// Claude Code セッション一覧
+    /// Claude Code session list
     sessions: Vec<ClaudeSession>,
-    /// リスト選択状態
+    /// List selection state
     list_state: ListState,
-    /// データソース
+    /// Data sources
     pane_ds: WeztermDataSource,
     process_ds: SystemProcessDataSource,
     detector: ClaudeCodeDetector,
-    /// dirty flag (再描画が必要か)
+    /// Dirty flag (needs redraw)
     dirty: bool,
-    /// リフレッシュ中フラグ
+    /// Refreshing flag
     refreshing: bool,
-    /// フル再描画が必要か（選択変更時などに差分描画の残像を防ぐ）
+    /// Needs full redraw (to prevent artifacts on selection change)
     needs_full_redraw: bool,
-    /// 'g' キーが押された状態（gg シーケンス用）
+    /// 'g' key pressed state (for gg sequence)
     pending_g: bool,
-    /// 前回の last_output のスナップショット（変更検出用）
+    /// Previous last_output snapshot (for change detection)
     prev_last_outputs: Vec<Option<String>>,
-    /// 最後のクリック時刻とインデックス（ダブルクリック判定用）
+    /// Last click time and index (for double click detection)
     last_click: Option<(std::time::Instant, usize)>,
-    /// リストエリアの Rect（クリック位置計算用）
+    /// List area Rect (for click position calculation)
     list_area: Option<Rect>,
 }
 
@@ -76,45 +76,45 @@ impl App {
         }
     }
 
-    /// セッション一覧をリフレッシュ
+    /// Refresh session list
     pub fn refresh(&mut self) -> Result<()> {
-        // 現在選択中の pane_id を保持
+        // Preserve currently selected pane_id
         let selected_pane_id = self
             .list_state
             .selected()
             .and_then(|i| self.sessions.get(i))
             .map(|s| s.pane.pane_id);
 
-        // 現在の workspace を取得
+        // Get current workspace
         let current_workspace = self.pane_ds.get_current_workspace()?;
 
         let panes = self.pane_ds.list_panes()?;
 
-        // プロセスツリーを1回だけ構築（最適化）
+        // Build process tree once (optimization)
         let process_tree = self.process_ds.build_tree()?;
 
         self.sessions = panes
             .into_iter()
             .filter_map(|pane| {
-                // 現在の workspace のみフィルタリング
+                // Filter by current workspace only
                 if pane.workspace != current_workspace {
                     return None;
                 }
 
-                // Claude Code 検出を試みる（プロセスツリーを再利用）
+                // Try to detect Claude Code (reusing process tree)
                 let reason = self
                     .detector
                     .detect_by_tty_with_tree(&pane, &process_tree)
                     .ok()??;
 
-                // セッション状態を取得
+                // Get session status
                 let (status, last_prompt, last_output) =
                     ClaudeSession::detect_status_and_output(&pane);
 
-                // Git branch を取得
+                // Get git branch
                 let git_branch = pane.cwd_path().and_then(|cwd| ClaudeSession::get_git_branch(&cwd));
 
-                // 検出されたセッションのみ保持
+                // Keep only detected sessions
                 Some(ClaudeSession {
                     pane,
                     detected: true,
@@ -127,8 +127,8 @@ impl App {
             })
             .collect();
 
-        // 同じ cwd で複数セッションがある場合は last_output を表示できない
-        // cwd ごとのセッション数をカウント
+        // Cannot show last_output when multiple sessions share the same cwd
+        // Count sessions per cwd
         let mut cwd_counts: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
         for session in &self.sessions {
@@ -137,7 +137,7 @@ impl App {
             }
         }
 
-        // 重複している cwd のセッションは last_prompt/last_output をクリア
+        // Clear last_prompt/last_output for sessions with duplicate cwd
         for session in &mut self.sessions {
             if let Some(cwd) = session.pane.cwd_path() {
                 if cwd_counts.get(&cwd).copied().unwrap_or(0) > 1 {
@@ -147,14 +147,14 @@ impl App {
             }
         }
 
-        // cwd でグループ化（ソート）
+        // Group by cwd (sort)
         self.sessions.sort_by(|a, b| {
             let cwd_a = a.pane.cwd_path().unwrap_or_default();
             let cwd_b = b.pane.cwd_path().unwrap_or_default();
             cwd_a.cmp(&cwd_b).then(a.pane.pane_id.cmp(&b.pane.pane_id))
         });
 
-        // 選択位置を維持（同じ pane_id があれば選択し直す）
+        // Maintain selection position (reselect if same pane_id exists)
         if !self.sessions.is_empty() {
             let new_index = selected_pane_id
                 .and_then(|id| self.sessions.iter().position(|s| s.pane.pane_id == id))
@@ -169,7 +169,7 @@ impl App {
         Ok(())
     }
 
-    /// 次のアイテムを選択
+    /// Select next item
     pub fn select_next(&mut self) {
         if self.sessions.is_empty() {
             return;
@@ -190,7 +190,7 @@ impl App {
         self.dirty = true;
     }
 
-    /// 前のアイテムを選択
+    /// Select previous item
     pub fn select_previous(&mut self) {
         if self.sessions.is_empty() {
             return;
@@ -211,7 +211,7 @@ impl App {
         self.dirty = true;
     }
 
-    /// 先頭のアイテムを選択 (gg)
+    /// Select first item (gg)
     pub fn select_first(&mut self) {
         if !self.sessions.is_empty() {
             self.list_state.select(Some(0));
@@ -219,7 +219,7 @@ impl App {
         }
     }
 
-    /// 末尾のアイテムを選択 (G)
+    /// Select last item (G)
     pub fn select_last(&mut self) {
         if !self.sessions.is_empty() {
             self.list_state.select(Some(self.sessions.len() - 1));
@@ -227,13 +227,13 @@ impl App {
         }
     }
 
-    /// 選択中のセッションにジャンプ
+    /// Jump to selected session
     pub fn jump_to_selected(&mut self) -> Result<()> {
         if let Some(i) = self.list_state.selected() {
             if let Some(session) = self.sessions.get(i) {
                 let pane_id = session.pane.pane_id;
 
-                // Pane をアクティベート
+                // Activate pane
                 WeztermCli::activate_pane(pane_id)?;
             }
         }
@@ -241,28 +241,28 @@ impl App {
         Ok(())
     }
 
-    /// リスト表示行からセッションインデックスを計算
-    /// グループヘッダーを考慮して、クリックされた行が対応するセッションを返す
+    /// Calculate session index from list display row
+    /// Returns the session corresponding to the clicked row, considering group headers
     fn row_to_session_index(&self, row: usize) -> Option<usize> {
-        // 行番号からセッションインデックスをマッピング
+        // Map row number to session index
         let mut current_row = 0;
         let mut current_cwd: Option<String> = None;
 
         for (session_idx, session) in self.sessions.iter().enumerate() {
             let cwd = session.pane.cwd_path().unwrap_or_default();
 
-            // 新しい CWD の場合はヘッダー行を追加
+            // Add header row for new CWD
             if current_cwd.as_ref() != Some(&cwd) {
                 current_cwd = Some(cwd.clone());
-                // ヘッダー行
+                // Header row
                 if current_row == row {
-                    // ヘッダークリックは無視（セッションじゃない）
+                    // Ignore header click (not a session)
                     return None;
                 }
                 current_row += 1;
             }
 
-            // セッション行
+            // Session row
             if current_row == row {
                 return Some(session_idx);
             }
@@ -272,26 +272,26 @@ impl App {
         None
     }
 
-    /// TUI を実行
+    /// Run TUI
     pub fn run(&mut self) -> Result<()> {
-        // ターミナルをセットアップ
+        // Setup terminal
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
-        // 初回リフレッシュ
+        // Initial refresh
         self.refresh()?;
 
-        // イベントハンドラ (3秒ごとに自動更新)
+        // Event handler (auto-update every 3 seconds)
         let event_handler = EventHandler::new(3000);
 
-        // メインループ
+        // Main loop
         let result = loop {
-            // dirty flag が立っている場合のみ描画
+            // Only draw when dirty flag is set
             if self.dirty {
-                // フル再描画が必要な場合はターミナルをクリア
+                // Clear terminal when full redraw is needed
                 if self.needs_full_redraw {
                     terminal.clear()?;
                     self.needs_full_redraw = false;
@@ -300,18 +300,18 @@ impl App {
                 self.dirty = false;
             }
 
-            // イベント処理
+            // Event processing
             match event_handler.next()? {
                 Event::Key(key) => {
-                    // gg シーケンスの処理
+                    // Handle gg sequence
                     if self.pending_g {
                         self.pending_g = false;
                         if key.code == KeyCode::Char('g') {
-                            // gg → 先頭へ
+                            // gg -> jump to first
                             self.select_first();
                             continue;
                         }
-                        // g の後に別のキーが来たら pending をリセットして通常処理
+                        // Reset pending if different key comes after g
                     }
 
                     if is_quit_key(&key) {
@@ -321,16 +321,16 @@ impl App {
                     } else if is_up_key(&key) {
                         self.select_previous();
                     } else if key.code == KeyCode::Char('g') {
-                        // 最初の g → pending 状態に
+                        // First g -> set pending state
                         self.pending_g = true;
                     } else if key.code == KeyCode::Char('G') {
-                        // G → 末尾へ
+                        // G -> jump to last
                         self.select_last();
                     } else if is_enter_key(&key) {
-                        // ジャンプを試みる（TUI は継続）
+                        // Try to jump (TUI continues)
                         let _ = self.jump_to_selected();
                     } else if is_refresh_key(&key) {
-                        // リフレッシュ中表示を出してから更新
+                        // Show refreshing indicator then update
                         self.refreshing = true;
                         self.dirty = true;
                         terminal.draw(|f| self.render(f))?;
@@ -339,24 +339,24 @@ impl App {
                     }
                 }
                 Event::Mouse(mouse) => {
-                    // 左クリックのみ処理
+                    // Handle left click only
                     if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
-                        // リストエリア内のクリックかチェック
+                        // Check if click is inside list area
                         if let Some(area) = self.list_area {
                             if mouse.column >= area.x
                                 && mouse.column < area.x + area.width
                                 && mouse.row >= area.y
                                 && mouse.row < area.y + area.height
                             {
-                                // ボーダーとタイトル（1行目）を除いた相対行
+                                // Relative row excluding border and title (first row)
                                 let relative_row = mouse.row.saturating_sub(area.y + 1);
 
-                                // クリックされたセッションインデックスを計算
+                                // Calculate clicked session index
                                 if let Some(idx) = self.row_to_session_index(relative_row as usize)
                                 {
                                     let now = std::time::Instant::now();
 
-                                    // ダブルクリック判定（300ms以内に同じアイテムをクリック）
+                                    // Double click detection (click same item within 300ms)
                                     let is_double_click = self
                                         .last_click
                                         .map(|(time, last_idx)| {
@@ -366,12 +366,12 @@ impl App {
                                         .unwrap_or(false);
 
                                     if is_double_click {
-                                        // ダブルクリック → ジャンプ
+                                        // Double click -> jump
                                         self.list_state.select(Some(idx));
                                         let _ = self.jump_to_selected();
                                         self.last_click = None;
                                     } else {
-                                        // シングルクリック → 選択
+                                        // Single click -> select
                                         self.list_state.select(Some(idx));
                                         self.dirty = true;
                                         self.last_click = Some((now, idx));
@@ -385,10 +385,10 @@ impl App {
                     self.dirty = true;
                 }
                 Event::Tick => {
-                    // 3秒ごとに自動リフレッシュ（インジケータなし）
+                    // Auto-refresh every 3 seconds (no indicator)
                     self.refresh()?;
 
-                    // last_output が変わった場合のみフル再描画（チラつき防止）
+                    // Full redraw only when last_output changes (prevent flickering)
                     let current_outputs: Vec<Option<String>> = self
                         .sessions
                         .iter()
@@ -403,7 +403,7 @@ impl App {
             }
         };
 
-        // ターミナルをクリーンアップ
+        // Cleanup terminal
         disable_raw_mode()?;
         execute!(
             terminal.backend_mut(),
@@ -415,21 +415,21 @@ impl App {
         result
     }
 
-    /// 描画
+    /// Render
     fn render(&mut self, f: &mut ratatui::Frame) {
         let size = f.area();
 
-        // TODO: トースト通知は Phase 4 で保留中
-        // pane 切り替え後に描画が見えない問題があるため一旦スキップ
+        // TODO: Toast notification deferred for later
+        // Skipping due to rendering visibility issue after pane switch
         let main_area = size;
 
-        // 2カラムレイアウト (左: リスト 45%, 右: 詳細 55%)
+        // 2-column layout (left: list 45%, right: details 55%)
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
             .split(main_area);
 
-        // リスト描画（list_area を更新）
+        // Render list (update list_area)
         self.list_area = render_list(
             f,
             chunks[0],
@@ -438,7 +438,7 @@ impl App {
             self.refreshing,
         );
 
-        // 詳細描画
+        // Render details
         render_details(f, chunks[1], &self.sessions, self.list_state.selected());
     }
 }

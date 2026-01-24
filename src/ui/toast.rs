@@ -1,49 +1,49 @@
 use std::time::{Duration, Instant};
 
-/// トースト通知の種類
+/// Toast notification type
 #[derive(Debug, Clone)]
 pub enum ToastType {
-    /// 成功 (緑)
+    /// Success (green)
     Success,
-    /// エラー (赤)
+    /// Error (red)
     Error,
 }
 
-/// トースト通知
+/// Toast notification
 #[derive(Debug, Clone)]
 pub struct Toast {
-    /// メッセージ
+    /// Message
     pub message: String,
-    /// 種類
+    /// Type
     pub toast_type: ToastType,
-    /// 表示開始時刻
+    /// Display start time
     pub start_time: Instant,
-    /// 表示時間 (ミリ秒)
+    /// Display duration (milliseconds)
     pub duration_ms: u64,
 }
 
 impl Toast {
-    /// 成功トーストを作成
+    /// Create success toast
     pub fn success(message: String) -> Self {
         Self {
             message,
             toast_type: ToastType::Success,
             start_time: Instant::now(),
-            duration_ms: 1000, // 1秒
+            duration_ms: 1000, // 1 second
         }
     }
 
-    /// エラートーストを作成
+    /// Create error toast
     pub fn error(message: String) -> Self {
         Self {
             message,
             toast_type: ToastType::Error,
             start_time: Instant::now(),
-            duration_ms: 3000, // 3秒
+            duration_ms: 3000, // 3 seconds
         }
     }
 
-    /// トーストが表示期限切れかどうか
+    /// Check if toast has expired
     pub fn is_expired(&self) -> bool {
         self.start_time.elapsed() > Duration::from_millis(self.duration_ms)
     }

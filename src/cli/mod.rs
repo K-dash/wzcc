@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 use std::process::Command;
 
-/// wezterm CLI ラッパー
+/// Wezterm CLI wrapper
 pub struct WeztermCli;
 
 impl WeztermCli {
-    /// 指定した pane にフォーカスを移動
+    /// Move focus to the specified pane
     pub fn activate_pane(pane_id: u32) -> Result<()> {
         let output = Command::new("wezterm")
             .args(["cli", "activate-pane", "--pane-id", &pane_id.to_string()])
@@ -24,7 +24,7 @@ impl WeztermCli {
         Ok(())
     }
 
-    /// 指定した tab にフォーカスを移動
+    /// Move focus to the specified tab
     pub fn activate_tab(tab_id: u32) -> Result<()> {
         let output = Command::new("wezterm")
             .args(["cli", "activate-tab", "--tab-id", &tab_id.to_string()])
@@ -43,7 +43,7 @@ impl WeztermCli {
         Ok(())
     }
 
-    /// 指定した pane のタブタイトルを変更
+    /// Change tab title for the specified pane
     pub fn set_tab_title(pane_id: u32, title: &str) -> Result<()> {
         let output = Command::new("wezterm")
             .args([
@@ -74,19 +74,19 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore] // wezterm CLI が必要なので CI では skip
+    #[ignore] // Skip in CI (requires wezterm CLI)
     fn test_activate_pane() {
-        // 現在のペインを取得
+        // Get current pane
         use crate::datasource::{PaneDataSource, WeztermDataSource};
 
         let ds = WeztermDataSource::new();
         let panes = ds.list_panes().unwrap();
 
-        // アクティブなペインを探す
+        // Find active pane
         let active_pane = panes.iter().find(|p| p.is_active);
 
         if let Some(pane) = active_pane {
-            // 同じペインをもう一度 activate (成功するはず)
+            // Activate the same pane again (should succeed)
             let result = WeztermCli::activate_pane(pane.pane_id);
             assert!(result.is_ok());
         }
@@ -95,7 +95,7 @@ mod tests {
     #[test]
     #[ignore]
     fn test_activate_nonexistent_pane() {
-        // 存在しない pane_id を指定
+        // Specify non-existent pane_id
         let result = WeztermCli::activate_pane(99999);
         assert!(result.is_err());
     }

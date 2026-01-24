@@ -4,22 +4,22 @@ use crossterm::event::{
 };
 use std::time::Duration;
 
-/// TUI イベント
+/// TUI event
 #[derive(Debug, Clone)]
 pub enum Event {
-    /// キー入力
+    /// Key input
     Key(KeyEvent),
-    /// マウス入力
+    /// Mouse input
     Mouse(MouseEvent),
-    /// Tick (定期更新)
+    /// Tick (periodic update)
     Tick,
-    /// リサイズ
+    /// Resize
     Resize(u16, u16),
 }
 
-/// イベントハンドラ
+/// Event handler
 pub struct EventHandler {
-    /// Tick 間隔 (ms)
+    /// Tick interval (ms)
     tick_rate: Duration,
 }
 
@@ -30,9 +30,9 @@ impl EventHandler {
         }
     }
 
-    /// 次のイベントを取得
+    /// Get next event
     pub fn next(&self) -> Result<Event> {
-        // crossterm の poll でタイムアウト付きでイベントを待つ
+        // Wait for event with timeout using crossterm poll
         if event::poll(self.tick_rate)? {
             match event::read()? {
                 CrosstermEvent::Key(key) => Ok(Event::Key(key)),
@@ -41,24 +41,24 @@ impl EventHandler {
                 _ => Ok(Event::Tick),
             }
         } else {
-            // タイムアウト → Tick イベント
+            // Timeout -> Tick event
             Ok(Event::Tick)
         }
     }
 }
 
-/// マウスイベントがシングルクリックかどうか
+/// Check if mouse event is a single click
 pub fn is_mouse_click(mouse: &MouseEvent) -> bool {
     matches!(mouse.kind, MouseEventKind::Down(_))
 }
 
-/// マウスイベントがダブルクリックかどうか（crossterm はダブルクリックを直接サポートしてないので時間で判定）
+/// Check if mouse event is a double click (crossterm doesn't support double click directly, so we use timing)
 pub fn is_mouse_double_click(mouse: &MouseEvent) -> bool {
-    // Note: ダブルクリック判定は App 側で時間計測して行う
+    // Note: Double click detection is done by timing measurement in App
     matches!(mouse.kind, MouseEventKind::Down(_))
 }
 
-/// キーイベントのヘルパー
+/// Key event helper
 pub fn is_quit_key(key: &KeyEvent) -> bool {
     matches!(
         key.code,

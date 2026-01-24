@@ -3,9 +3,9 @@ use crate::detector::DetectionReason;
 use crate::models::Pane;
 use anyhow::Result;
 
-/// Claude Code 検出器
+/// Claude Code detector
 pub struct ClaudeCodeDetector {
-    /// 検出対象のプロセス名リスト (allowlist)
+    /// Process names to detect (allowlist)
     process_names: Vec<String>,
 }
 
@@ -22,17 +22,16 @@ impl ClaudeCodeDetector {
         }
     }
 
-    /// allowlist をカスタマイズ
+    /// Customize allowlist
     pub fn with_process_names(mut self, names: Vec<String>) -> Self {
         self.process_names = names;
         self
     }
 
-    /// Case 2: TTY マッチングで Claude Code を検出
+    /// Case 2: Detect Claude Code by TTY matching
     ///
-    /// pane の tty_name と ps の TTY を突合し、プロセス名が allowlist に含まれるかチェック
-    /// Phase 2.2: プロセスツリーを使って wrapper 経由起動も検出
-    /// Phase 2.3: 検出根拠を返すように変更
+    /// Match pane's tty_name with ps TTY and check if process name is in allowlist
+    /// Also detects wrapper-launched processes using process tree
     pub fn detect_by_tty<P: ProcessDataSource>(
         &self,
         pane: &Pane,
@@ -42,13 +41,13 @@ impl ClaudeCodeDetector {
         self.detect_by_tty_with_tree(pane, &tree)
     }
 
-    /// 事前構築済みのプロセスツリーを使って検出（パフォーマンス最適化版）
+    /// Detect using pre-built process tree (performance optimized)
     pub fn detect_by_tty_with_tree(
         &self,
         pane: &Pane,
         tree: &ProcessTree,
     ) -> Result<Option<DetectionReason>> {
-        // 自分自身のペイン (wzcc を実行しているペイン) を除外
+        // Exclude own pane (the pane running wzcc)
         if let Ok(current_pane_id) = std::env::var("WEZTERM_PANE") {
             if let Ok(current_id) = current_pane_id.parse::<u32>() {
                 if pane.pane_id == current_id {
@@ -57,33 +56,33 @@ impl ClaudeCodeDetector {
             }
         }
 
-        // pane に tty_name がない場合は Case 2 を使えない
+        // Cannot use Case 2 if pane has no tty_name
         let pane_tty_short = match pane.tty_short() {
             Some(tty) => tty,
             None => return Ok(None),
         };
 
-        // TTY が一致するプロセスを検索
+        // Search for processes with matching TTY
         for (pid, proc) in tree.processes.iter() {
-            // プロセスに TTY がない場合はスキップ
+            // Skip if process has no TTY
             let proc_tty = match &proc.tty {
                 Some(tty) => tty,
                 None => continue,
             };
 
-            // TTY が一致しない場合はスキップ
+            // Skip if TTY doesn't match
             if proc_tty != &pane_tty_short {
                 continue;
             }
 
-            // プロセス名が allowlist に含まれるかチェック (直接)
+            // Check if process name is in allowlist (direct)
             if self.is_claude_process(proc) {
                 return Ok(Some(DetectionReason::DirectTtyMatch {
                     process_name: proc.command.clone(),
                 }));
             }
 
-            // Phase 2.2: プロセスツリーで親プロセスに claude があるかチェック (wrapper 対応)
+            // Check if parent process has claude using process tree (wrapper support)
             for name in &self.process_names {
                 if tree.has_ancestor(*pid, name) {
                     return Ok(Some(DetectionReason::WrapperDetected {
@@ -96,7 +95,7 @@ impl ClaudeCodeDetector {
         Ok(None)
     }
 
-    /// プロセスが Claude Code かどうかを判定 (allowlist チェック)
+    /// Check if process is Claude Code (allowlist check)
     fn is_claude_process(&self, proc: &ProcessInfo) -> bool {
         let command_lower = proc.command.to_lowercase();
 
@@ -106,7 +105,7 @@ impl ClaudeCodeDetector {
             }
         }
 
-        // args にも含まれるかチェック
+        // Also check in args
         if let Some(args) = &proc.args {
             let args_lower = args.to_lowercase();
             for name in &self.process_names {
@@ -311,7 +310,7 @@ mod tests {
     #[test]
     #[ignore]
     fn test_detect_by_tty() {
-        // 実際に動いている Claude Code セッションがある場合のテスト
+        // Test for when there's an actual running Claude Code session
         use crate::datasource::{PaneDataSource, WeztermDataSource};
 
         let detector = ClaudeCodeDetector::new();
@@ -320,7 +319,7 @@ mod tests {
 
         let panes = pane_ds.list_panes().unwrap();
 
-        // title に "✳" が含まれるペインを探す (おそらく Claude Code)
+        // Find pane with "✳" in title (likely Claude Code)
         let claude_pane = panes.iter().find(|p| p.title.contains("✳"));
 
         if let Some(pane) = claude_pane {
@@ -330,7 +329,7 @@ mod tests {
                 pane.pane_id, pane.title, reason
             );
 
-            // この pane は Claude Code であるはず
+            // This pane should be Claude Code
             assert!(reason.is_some());
         }
     }

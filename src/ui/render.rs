@@ -16,7 +16,7 @@ pub fn render_list(
     list_state: &mut ListState,
     refreshing: bool,
 ) -> Option<Rect> {
-    // cwd ごとのセッション数をカウント
+    // Count sessions per cwd
     let mut cwd_info: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for session in sessions {
         if let Some(cwd) = session.pane.cwd_path() {
@@ -24,30 +24,30 @@ pub fn render_list(
         }
     }
 
-    // リストアイテムを構築（ヘッダー + セッション）
+    // Build list items (header + sessions)
     let mut items: Vec<ListItem> = Vec::new();
-    let mut session_indices: Vec<usize> = Vec::new(); // ListItem index → session index マッピング
+    let mut session_indices: Vec<usize> = Vec::new(); // ListItem index -> session index mapping
     let mut current_cwd: Option<String> = None;
 
     for (session_idx, session) in sessions.iter().enumerate() {
         let pane = &session.pane;
         let cwd = pane.cwd_path().unwrap_or_default();
 
-        // グループ情報を取得
+        // Get group info
         let count = cwd_info.get(&cwd).copied().unwrap_or(1);
 
-        // 新しい CWD の場合はヘッダーを追加
+        // Add header for new CWD
         if current_cwd.as_ref() != Some(&cwd) {
             current_cwd = Some(cwd.clone());
 
-            // cwd の末尾ディレクトリ名を取得
+            // Get directory name from cwd
             let dir_name = std::path::Path::new(&cwd)
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or(&cwd)
                 .to_string();
 
-            // 複数セッションの場合はセッション数も表示
+            // Show session count if multiple sessions
             let header_text = if count > 1 {
                 format!("📂 {} ({} sessions)", dir_name, count)
             } else {
@@ -56,10 +56,10 @@ pub fn render_list(
 
             let header_line = Line::from(vec![Span::raw(header_text)]);
             items.push(ListItem::new(header_line));
-            session_indices.push(usize::MAX); // ヘッダーはセッションじゃない
+            session_indices.push(usize::MAX); // Header is not a session
         }
 
-        // 状態アイコンと色
+        // Status icon and color
         let (status_icon, status_color) = match &session.status {
             SessionStatus::Ready => ("◇", Color::Cyan),
             SessionStatus::Processing => ("●", Color::Yellow),
@@ -68,7 +68,7 @@ pub fn render_list(
             SessionStatus::Unknown => ("?", Color::DarkGray),
         };
 
-        // タイトル (最大35文字)
+        // Title (max 35 chars)
         let title = if pane.title.chars().count() > 35 {
             let truncated: String = pane.title.chars().take(32).collect();
             format!("{}...", truncated)
@@ -76,7 +76,7 @@ pub fn render_list(
             pane.title.clone()
         };
 
-        // インデント（すべてのセッションにインデント）
+        // Indent (all sessions are indented)
         let line = Line::from(vec![
             Span::raw("  "),
             Span::styled(
@@ -100,7 +100,7 @@ pub fn render_list(
         session_indices.push(session_idx);
     }
 
-    // list_state のインデックスを ListItem のインデックスに変換
+    // Convert list_state index to ListItem index
     let list_index = list_state
         .selected()
         .and_then(|session_idx| session_indices.iter().position(|&idx| idx == session_idx));
@@ -108,7 +108,7 @@ pub fn render_list(
     let mut render_state = ListState::default();
     render_state.select(list_index);
 
-    // タイトル（リフレッシュ中はインジケータ表示）
+    // Title (show indicator while refreshing)
     let title = if refreshing {
         " ⌛ Claude Code Sessions - Refreshing... ".to_string()
     } else {
@@ -162,7 +162,7 @@ pub fn render_details(
                 ]));
             }
 
-            // Phase 3: セッション状態を表示
+            // Display session status
             lines.push(Line::from(""));
             let (status_color, status_text) = status_display(&session.status);
             lines.push(Line::from(vec![
@@ -170,7 +170,7 @@ pub fn render_details(
                 Span::styled(status_text, Style::default().fg(status_color)),
             ]));
 
-            // Git branch を表示
+            // Display git branch
             if let Some(branch) = &session.git_branch {
                 lines.push(Line::from(""));
                 lines.push(Line::from(vec![
@@ -179,28 +179,28 @@ pub fn render_details(
                 ]));
             }
 
-            // Last prompt と Last output プレビューを表示
-            // 固定部分: Pane(2) + CWD(3) + TTY(2) + Status(2) + Branch(2) + ボーダー(2) = 約13行
+            // Display last prompt and last output preview
+            // Fixed lines: Pane(2) + CWD(3) + TTY(2) + Status(2) + Branch(2) + border(2) = ~13 lines
             let fixed_lines: u16 = 13;
             let available_for_preview = area.height.saturating_sub(fixed_lines) as usize;
             let inner_width = (area.width.saturating_sub(2)) as usize;
 
-            // 最低1行あれば表示（以前は3行で厳しすぎた）
+            // Display if at least 1 line available (previously 3 lines was too strict)
             if available_for_preview >= 1 {
-                // 区切り線
+                // Separator line
                 lines.push(Line::from(""));
                 lines.push(Line::from(vec![Span::styled(
                     "─".repeat(inner_width),
                     Style::default().fg(Color::DarkGray),
                 )]));
 
-                // Last prompt を表示（1-2行）
+                // Display last prompt (1-2 lines)
                 if let Some(prompt) = &session.last_prompt {
                     lines.push(Line::from(vec![Span::styled(
                         "💬 Last prompt:",
                         Style::default().add_modifier(Modifier::BOLD),
                     )]));
-                    // プロンプトは1-2行で truncate
+                    // Truncate prompt to 1-2 lines
                     let prompt_chars: Vec<char> = prompt.chars().collect();
                     let max_prompt_len = inner_width * 2;
                     let truncated: String = if prompt_chars.len() > max_prompt_len {
@@ -216,9 +216,9 @@ pub fn render_details(
                     }
                 }
 
-                // Last output を表示
+                // Display last output
                 if let Some(output) = &session.last_output {
-                    // prompt と output の間に区切り線
+                    // Separator between prompt and output
                     if session.last_prompt.is_some() {
                         lines.push(Line::from(""));
                         lines.push(Line::from(vec![Span::styled(
@@ -232,7 +232,7 @@ pub fn render_details(
                         Style::default().add_modifier(Modifier::BOLD),
                     )]));
 
-                    // 区切り + prompt + output label で約8行使う
+                    // Separator + prompt + output label uses ~8 lines
                     let preview_lines = available_for_preview.saturating_sub(8);
                     let output_lines =
                         wrap_text_lines(output, inner_width, preview_lines, Color::Gray);

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use std::collections::{HashMap, VecDeque};
 use std::process::Command;
 
-/// プロセス情報
+/// Process information
 #[derive(Debug, Clone)]
 pub struct ProcessInfo {
     pub pid: u32,
@@ -12,25 +12,25 @@ pub struct ProcessInfo {
     pub args: Option<String>,
 }
 
-/// プロセスツリー
+/// Process tree
 pub struct ProcessTree {
-    /// 子プロセスのマップ (pid -> [child_pids])
+    /// Child processes map (pid -> [child_pids])
     pub children: HashMap<u32, Vec<u32>>,
-    /// 全プロセス情報 (pid -> ProcessInfo)
+    /// All process information (pid -> ProcessInfo)
     pub processes: HashMap<u32, ProcessInfo>,
 }
 
 impl ProcessTree {
-    /// プロセス一覧からツリーを構築
+    /// Build tree from process list
     pub fn build(processes: Vec<ProcessInfo>) -> Self {
         let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
         let mut process_map: HashMap<u32, ProcessInfo> = HashMap::new();
 
         for proc in processes {
-            // 親の children リストに追加
+            // Add to parent's children list
             children.entry(proc.ppid).or_default().push(proc.pid);
 
-            // プロセス情報を保存
+            // Save process info
             process_map.insert(proc.pid, proc);
         }
 
@@ -40,7 +40,7 @@ impl ProcessTree {
         }
     }
 
-    /// 指定した PID の祖先に target 文字列を含むプロセスがあるかチェック (BFS)
+    /// Check if any ancestor of the specified PID contains the target string (BFS)
     pub fn has_ancestor(&self, pid: u32, target: &str) -> bool {
         let target_lower = target.to_lowercase();
         let mut visited = std::collections::HashSet::new();
@@ -57,7 +57,7 @@ impl ProcessTree {
                 continue;
             };
 
-            // コマンド名または引数に target が含まれるかチェック
+            // Check if command name or args contains target
             if proc.command.to_lowercase().contains(&target_lower) {
                 return true;
             }
@@ -68,7 +68,7 @@ impl ProcessTree {
                 }
             }
 
-            // 親プロセスをキューに追加
+            // Add parent process to queue
             if proc.ppid != 0 {
                 queue.push_back(proc.ppid);
             }
@@ -77,24 +77,24 @@ impl ProcessTree {
         false
     }
 
-    /// 指定した PID のプロセス情報を取得
+    /// Get process information for the specified PID
     pub fn get(&self, pid: u32) -> Option<&ProcessInfo> {
         self.processes.get(&pid)
     }
 }
 
-/// プロセスデータソースの trait
+/// Process data source trait
 pub trait ProcessDataSource {
     fn list_processes(&self) -> Result<Vec<ProcessInfo>>;
 
-    /// プロセスツリーを構築
+    /// Build process tree
     fn build_tree(&self) -> Result<ProcessTree> {
         let processes = self.list_processes()?;
         Ok(ProcessTree::build(processes))
     }
 }
 
-/// システムの ps コマンドからプロセス情報を取得
+/// Get process information from system ps command
 pub struct SystemProcessDataSource;
 
 impl Default for SystemProcessDataSource {
@@ -108,16 +108,16 @@ impl SystemProcessDataSource {
         Self
     }
 
-    /// TTY を正規化 (pts/0, ttys001 など)
+    /// Normalize TTY (pts/0, ttys001, etc.)
     fn normalize_tty(tty: &str) -> Option<String> {
         let tty = tty.trim();
 
-        // "?" は TTY なしを意味する
+        // "?" means no TTY
         if tty == "?" || tty.is_empty() {
             return None;
         }
 
-        // "/dev/" プレフィックスを除去
+        // Remove "/dev/" prefix
         let tty = tty.strip_prefix("/dev/").unwrap_or(tty);
 
         Some(tty.to_string())
@@ -127,7 +127,7 @@ impl SystemProcessDataSource {
 impl ProcessDataSource for SystemProcessDataSource {
     fn list_processes(&self) -> Result<Vec<ProcessInfo>> {
         // ps -eo pid,ppid,tty,comm,args
-        // macOS/Linux 共通の形式
+        // Common format for macOS/Linux
         let output = Command::new("ps")
             .args(["-eo", "pid,ppid,tty,comm,args"])
             .output()
@@ -138,13 +138,13 @@ impl ProcessDataSource for SystemProcessDataSource {
             anyhow::bail!("ps command failed: {}", stderr);
         }
 
-        // UTF-8 でない文字は ? に置換 (macOS で一部プロセスに非 UTF-8 が含まれる場合がある)
+        // Replace non-UTF-8 chars with ? (some processes on macOS may contain non-UTF-8)
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
 
         let mut processes = Vec::new();
 
         for (idx, line) in stdout.lines().enumerate() {
-            // ヘッダー行をスキップ
+            // Skip header line
             if idx == 0 {
                 continue;
             }
@@ -154,11 +154,11 @@ impl ProcessDataSource for SystemProcessDataSource {
                 continue;
             }
 
-            // PID PPID TTY COMMAND ARGS の順
+            // Order: PID PPID TTY COMMAND ARGS
             let parts: Vec<&str> = line.splitn(5, ' ').filter(|s| !s.is_empty()).collect();
 
             if parts.len() < 4 {
-                // パース失敗は無視
+                // Ignore parse failures
                 continue;
             }
 
@@ -387,10 +387,10 @@ mod tests {
         let ds = SystemProcessDataSource::new();
         let processes = ds.list_processes().unwrap();
 
-        // 少なくとも1つのプロセスがあるはず
+        // Should have at least one process
         assert!(!processes.is_empty());
 
-        // PID 1 (init/launchd) が存在するはず
+        // PID 1 (init/launchd) should exist
         let init = processes.iter().find(|p| p.pid == 1);
         assert!(init.is_some());
     }
