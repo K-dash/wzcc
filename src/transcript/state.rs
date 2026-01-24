@@ -90,6 +90,44 @@ pub fn detect_session_status_with_config(
         return Ok(SessionStatus::Idle);
     }
 
+    // For system entries (other than stop_hook_summary/turn_duration) or internal entries
+    // like file-history-snapshot, queue-operation, etc., look at previous entries
+    if last.type_ == "system"
+        || last.type_ == "file-history-snapshot"
+        || last.type_ == "queue-operation"
+    {
+        // Find the last meaningful entry (assistant or user)
+        for entry in entries.iter().rev().skip(1) {
+            if entry.is_stop_hook_summary() || entry.is_turn_duration() || entry.is_end_turn() {
+                return Ok(SessionStatus::Idle);
+            }
+            if entry.type_ == "assistant" && !entry.is_tool_use() {
+                return Ok(SessionStatus::Idle);
+            }
+            if entry.is_tool_use() {
+                // Check time for WaitingForUser
+                if let Some(timestamp) = &entry.timestamp {
+                    if let Ok(entry_time) = DateTime::parse_from_rfc3339(timestamp) {
+                        let now = Utc::now();
+                        let elapsed = now.signed_duration_since(entry_time.with_timezone(&Utc));
+                        if elapsed.num_seconds() > config.waiting_timeout_secs as i64 {
+                            return Ok(SessionStatus::WaitingForUser {
+                                tools: entry.get_tool_names(),
+                            });
+                        }
+                    }
+                }
+                return Ok(SessionStatus::Processing);
+            }
+            if entry.type_ == "user" {
+                return Ok(SessionStatus::Processing);
+            }
+            if entry.is_progress() {
+                return Ok(SessionStatus::Processing);
+            }
+        }
+    }
+
     // Check for assistant with end_turn - Idle
     if last.is_end_turn() {
         return Ok(SessionStatus::Idle);
