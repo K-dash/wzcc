@@ -103,10 +103,10 @@ Once the TUI launches:
 ```
 ┌─ Claude Code Sessions (2) ────────────┬─ Details ────────────────┐
 │ 📂 projects/app (2 sessions)          │ Pane: 92                 │
-│   >> ◐ Pane 92: Docs [Waiting]       │                          │
-│      ● Pane 228: Coding [Idle]       │ CWD:                     │
+│   >> ◐ Pane 92: Docs [Waiting]        │                          │
+│      ● Pane 228: Coding [Idle]        │ CWD:                     │
 │ 📂 develop/feature                    │ ~/hobby/wzcc             │
-│      ○ Pane 235: Setup [Ready]       │                          │
+│      ○ Pane 235: Setup [Ready]        │                          │
 │                                       │ TTY: /dev/ttys042        │
 │                                       │                          │
 │                                       │ Status: Waiting          │
