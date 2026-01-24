@@ -9,9 +9,63 @@ use std::path::Path;
 
 /// Remove <system-reminder>...</system-reminder> tags from text.
 fn remove_system_reminders(text: &str) -> String {
-    // Use regex to remove system-reminder tags and their content
     let re = Regex::new(r"<system-reminder>[\s\S]*?</system-reminder>").unwrap();
     re.replace_all(text, "").trim().to_string()
+}
+
+/// Truncate text to max_chars, appending "..." if truncated.
+fn truncate_with_ellipsis(text: String, max_chars: usize) -> String {
+    if text.chars().count() > max_chars {
+        let mut s: String = text.chars().take(max_chars).collect();
+        s.push_str("...");
+        s
+    } else {
+        text
+    }
+}
+
+/// Read lines from a file, optionally seeking near the end for large files.
+/// Returns non-empty lines from the file.
+fn read_lines_from_end(path: &Path, seek_multiplier: u64) -> Result<Vec<String>> {
+    let file = File::open(path)?;
+    let metadata = file.metadata()?;
+    let file_size = metadata.len();
+
+    if file_size == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut reader = BufReader::new(file);
+    let mut lines = Vec::new();
+
+    if file_size < 1024 * 1024 {
+        // < 1MB: read all lines
+        for line in reader.lines() {
+            let line = line?;
+            if !line.trim().is_empty() {
+                lines.push(line);
+            }
+        }
+    } else {
+        // Large file: seek near end
+        let seek_pos = file_size.saturating_sub(seek_multiplier * 100 * 1024);
+        reader.seek(SeekFrom::Start(seek_pos))?;
+
+        // Skip partial line if we seeked to middle
+        if seek_pos > 0 {
+            let mut _skip = String::new();
+            reader.read_line(&mut _skip)?;
+        }
+
+        for line in reader.lines() {
+            let line = line?;
+            if !line.trim().is_empty() {
+                lines.push(line);
+            }
+        }
+    }
+
+    Ok(lines)
 }
 
 /// A content block within a message.
@@ -137,56 +191,19 @@ impl TranscriptEntry {
 /// Read the last N entries from a transcript file.
 /// Uses reverse file reading for efficiency with large files.
 pub fn read_last_entries(path: &Path, count: usize) -> Result<Vec<TranscriptEntry>> {
-    let file = File::open(path)?;
-    let metadata = file.metadata()?;
-    let file_size = metadata.len();
+    let lines = read_lines_from_end(path, count as u64 + 10)?;
 
-    if file_size == 0 {
+    if lines.is_empty() {
         return Ok(Vec::new());
     }
 
-    // Read from the end of the file
-    let mut reader = BufReader::new(file);
-    let mut entries = Vec::new();
-    let mut lines = Vec::new();
-
-    // For small files, just read all lines
-    if file_size < 1024 * 1024 {
-        // < 1MB
-        for line in reader.lines() {
-            let line = line?;
-            if !line.trim().is_empty() {
-                lines.push(line);
-            }
-        }
-    } else {
-        // For large files, seek to near the end and read
-        // We estimate ~100KB per entry (entries can be quite large with tool outputs)
-        // and read extra to be safe
-        let seek_pos = file_size.saturating_sub((count as u64 + 10) * 100 * 1024);
-        reader.seek(SeekFrom::Start(seek_pos))?;
-
-        // Skip partial line if we seeked to middle
-        if seek_pos > 0 {
-            let mut _skip = String::new();
-            reader.read_line(&mut _skip)?;
-        }
-
-        for line in reader.lines() {
-            let line = line?;
-            if !line.trim().is_empty() {
-                lines.push(line);
-            }
-        }
-    }
-
     // Parse the last N lines
-    for line in lines.iter().rev().take(count) {
-        match serde_json::from_str::<TranscriptEntry>(line) {
-            Ok(entry) => entries.push(entry),
-            Err(_) => continue, // Skip invalid JSON lines
-        }
-    }
+    let mut entries: Vec<TranscriptEntry> = lines
+        .iter()
+        .rev()
+        .take(count)
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
 
     // Reverse to get chronological order
     entries.reverse();
@@ -230,56 +247,20 @@ pub struct UserTranscriptEntry {
 /// Get the last user prompt from a transcript file.
 /// Returns the text content (up to max_chars) from the most recent user message.
 pub fn get_last_user_prompt(path: &Path, max_chars: usize) -> Result<Option<String>> {
-    let file = std::fs::File::open(path)?;
-    let metadata = file.metadata()?;
-    let file_size = metadata.len();
+    let lines = read_lines_from_end(path, 30)?;
 
-    if file_size == 0 {
+    if lines.is_empty() {
         return Ok(None);
     }
 
-    // Read lines from the file
-    let mut reader = std::io::BufReader::new(file);
-    let mut lines = Vec::new();
-
-    if file_size < 1024 * 1024 {
-        use std::io::BufRead;
-        for line in reader.lines() {
-            let line = line?;
-            if !line.trim().is_empty() {
-                lines.push(line);
-            }
-        }
-    } else {
-        use std::io::{BufRead, Seek, SeekFrom};
-        let seek_pos = file_size.saturating_sub(30 * 100 * 1024);
-        reader.seek(SeekFrom::Start(seek_pos))?;
-        if seek_pos > 0 {
-            let mut _skip = String::new();
-            reader.read_line(&mut _skip)?;
-        }
-        for line in reader.lines() {
-            let line = line?;
-            if !line.trim().is_empty() {
-                lines.push(line);
-            }
-        }
-    }
-
     // Search from the end for a user message with text content (not tool_result, not isMeta)
-    // Need to search more entries since many are tool_results
     for line in lines.iter().rev().take(200) {
         let entry: UserTranscriptEntry = match serde_json::from_str(line) {
             Ok(e) => e,
             Err(_) => continue,
         };
 
-        if entry.type_ != "user" {
-            continue;
-        }
-
-        // Skip meta messages (like local-command-caveat)
-        if entry.is_meta == Some(true) {
+        if entry.type_ != "user" || entry.is_meta == Some(true) {
             continue;
         }
 
@@ -293,7 +274,6 @@ pub fn get_last_user_prompt(path: &Path, max_chars: usize) -> Result<Option<Stri
                 if s.contains("tool_result") && !s.contains('\n') {
                     continue;
                 }
-                // Remove <system-reminder> tags and their content
                 let cleaned = remove_system_reminders(s);
                 if cleaned.trim().is_empty() {
                     continue;
@@ -301,11 +281,9 @@ pub fn get_last_user_prompt(path: &Path, max_chars: usize) -> Result<Option<Stri
                 cleaned
             }
             UserContent::Blocks(blocks) => {
-                // Check if any block is a tool_result
                 if blocks.iter().any(|b| b.type_ == "tool_result") {
                     continue;
                 }
-                // Collect text blocks and remove system reminders
                 let raw_text = blocks
                     .iter()
                     .filter(|b| b.type_ == "text")
@@ -323,15 +301,7 @@ pub fn get_last_user_prompt(path: &Path, max_chars: usize) -> Result<Option<Stri
         };
 
         if !text.is_empty() {
-            // Truncate to max_chars
-            let truncated = if text.chars().count() > max_chars {
-                let mut s: String = text.chars().take(max_chars).collect();
-                s.push_str("...");
-                s
-            } else {
-                text
-            };
-            return Ok(Some(truncated));
+            return Ok(Some(truncate_with_ellipsis(text, max_chars)));
         }
     }
 
@@ -341,8 +311,6 @@ pub fn get_last_user_prompt(path: &Path, max_chars: usize) -> Result<Option<Stri
 /// Get the last assistant text output from a transcript file.
 /// Returns the text content (up to max_chars) from the most recent assistant message.
 pub fn get_last_assistant_text(path: &Path, max_chars: usize) -> Result<Option<String>> {
-    // Read more entries to find an assistant message with text
-    // (some entries might be tool_use only)
     let entries = read_last_entries(path, 20)?;
 
     // Search from the end for an assistant message with text content
@@ -355,7 +323,6 @@ pub fn get_last_assistant_text(path: &Path, max_chars: usize) -> Result<Option<S
             continue;
         };
 
-        // Collect all text content from this message
         let text: String = msg
             .content
             .iter()
@@ -366,15 +333,7 @@ pub fn get_last_assistant_text(path: &Path, max_chars: usize) -> Result<Option<S
             .join("\n");
 
         if !text.is_empty() {
-            // Truncate to max_chars
-            let truncated = if text.chars().count() > max_chars {
-                let mut s: String = text.chars().take(max_chars).collect();
-                s.push_str("...");
-                s
-            } else {
-                text
-            };
-            return Ok(Some(truncated));
+            return Ok(Some(truncate_with_ellipsis(text, max_chars)));
         }
     }
 
@@ -585,5 +544,30 @@ mod tests {
         let json = r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"content":[{"type":"tool_use"}]}}"#;
         let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
         assert!(entry.get_tool_names().is_empty());
+    }
+
+    // truncate_with_ellipsis tests
+    #[test]
+    fn test_truncate_with_ellipsis_no_truncation() {
+        let text = "Short text".to_string();
+        assert_eq!(truncate_with_ellipsis(text, 20), "Short text");
+    }
+
+    #[test]
+    fn test_truncate_with_ellipsis_exact_length() {
+        let text = "Exact".to_string();
+        assert_eq!(truncate_with_ellipsis(text, 5), "Exact");
+    }
+
+    #[test]
+    fn test_truncate_with_ellipsis_truncated() {
+        let text = "This is a long text that needs truncation".to_string();
+        assert_eq!(truncate_with_ellipsis(text, 10), "This is a ...");
+    }
+
+    #[test]
+    fn test_truncate_with_ellipsis_multibyte() {
+        let text = "日本語テスト".to_string();
+        assert_eq!(truncate_with_ellipsis(text, 3), "日本語...");
     }
 }

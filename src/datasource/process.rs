@@ -42,6 +42,7 @@ impl ProcessTree {
 
     /// 指定した PID の祖先に target 文字列を含むプロセスがあるかチェック (BFS)
     pub fn has_ancestor(&self, pid: u32, target: &str) -> bool {
+        let target_lower = target.to_lowercase();
         let mut visited = std::collections::HashSet::new();
         let mut queue = VecDeque::new();
         queue.push_back(pid);
@@ -52,18 +53,17 @@ impl ProcessTree {
             }
             visited.insert(current_pid);
 
-            // 現在のプロセスを取得
             let Some(proc) = self.processes.get(&current_pid) else {
                 continue;
             };
 
             // コマンド名または引数に target が含まれるかチェック
-            if proc.command.to_lowercase().contains(target) {
+            if proc.command.to_lowercase().contains(&target_lower) {
                 return true;
             }
 
             if let Some(args) = &proc.args {
-                if args.to_lowercase().contains(target) {
+                if args.to_lowercase().contains(&target_lower) {
                     return true;
                 }
             }

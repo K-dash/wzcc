@@ -783,31 +783,4 @@ impl App {
 
         f.render_widget(paragraph, area);
     }
-
-    // TODO: トースト描画は Phase 4 で保留中
-    // pane 切り替え後に描画が見えない問題があるため一旦スキップ
-    /*
-    fn render_toast(&self, f: &mut ratatui::Frame, area: Rect) {
-        if let Some(toast) = &self.toast {
-            use super::toast::ToastType;
-
-            let (color, symbol) = match toast.toast_type {
-                ToastType::Success => (Color::Green, "✓"),
-                ToastType::Error => (Color::Red, "✗"),
-            };
-
-            let text = vec![Line::from(vec![
-                Span::styled(symbol, Style::default().fg(color).add_modifier(Modifier::BOLD)),
-                Span::raw(" "),
-                Span::raw(&toast.message),
-            ])];
-
-            let paragraph = Paragraph::new(text)
-                .block(Block::default().borders(Borders::ALL))
-                .style(Style::default().fg(color));
-
-            f.render_widget(paragraph, area);
-        }
-    }
-    */
 }
