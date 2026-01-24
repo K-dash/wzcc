@@ -210,13 +210,14 @@ mod tests {
         let detector = ClaudeCodeDetector::new();
         let pane = create_pane(1, Some("/dev/ttys001"));
 
-        let processes = vec![
-            create_process(100, 1, Some("ttys001"), "claude"),
-        ];
+        let processes = vec![create_process(100, 1, Some("ttys001"), "claude")];
         let tree = ProcessTree::build(processes);
 
         let result = detector.detect_by_tty_with_tree(&pane, &tree).unwrap();
-        assert!(matches!(result, Some(DetectionReason::DirectTtyMatch { .. })));
+        assert!(matches!(
+            result,
+            Some(DetectionReason::DirectTtyMatch { .. })
+        ));
     }
 
     #[test]
@@ -224,9 +225,7 @@ mod tests {
         let detector = ClaudeCodeDetector::new();
         let pane = create_pane(1, Some("/dev/ttys001"));
 
-        let processes = vec![
-            create_process(100, 1, Some("ttys002"), "claude"),
-        ];
+        let processes = vec![create_process(100, 1, Some("ttys002"), "claude")];
         let tree = ProcessTree::build(processes);
 
         let result = detector.detect_by_tty_with_tree(&pane, &tree).unwrap();
@@ -238,9 +237,7 @@ mod tests {
         let detector = ClaudeCodeDetector::new();
         let pane = create_pane(1, Some("/dev/ttys001"));
 
-        let processes = vec![
-            create_process(100, 1, Some("ttys001"), "bash"),
-        ];
+        let processes = vec![create_process(100, 1, Some("ttys001"), "bash")];
         let tree = ProcessTree::build(processes);
 
         let result = detector.detect_by_tty_with_tree(&pane, &tree).unwrap();
@@ -255,23 +252,24 @@ mod tests {
         // bash -> shell -> claude (ancestor)
         // TTY matches on shell process, but claude is ancestor
         let processes = vec![
-            create_process(100, 1, None, "claude"),      // ancestor
-            create_process(200, 100, Some("ttys001"), "shell"),  // child with matching TTY
+            create_process(100, 1, None, "claude"),             // ancestor
+            create_process(200, 100, Some("ttys001"), "shell"), // child with matching TTY
         ];
         let tree = ProcessTree::build(processes);
 
         let result = detector.detect_by_tty_with_tree(&pane, &tree).unwrap();
-        assert!(matches!(result, Some(DetectionReason::WrapperDetected { .. })));
+        assert!(matches!(
+            result,
+            Some(DetectionReason::WrapperDetected { .. })
+        ));
     }
 
     #[test]
     fn test_detect_pane_without_tty() {
         let detector = ClaudeCodeDetector::new();
-        let pane = create_pane(1, None);  // No TTY
+        let pane = create_pane(1, None); // No TTY
 
-        let processes = vec![
-            create_process(100, 1, Some("ttys001"), "claude"),
-        ];
+        let processes = vec![create_process(100, 1, Some("ttys001"), "claude")];
         let tree = ProcessTree::build(processes);
 
         let result = detector.detect_by_tty_with_tree(&pane, &tree).unwrap();
@@ -284,7 +282,7 @@ mod tests {
         let pane = create_pane(1, Some("/dev/ttys001"));
 
         let processes = vec![
-            create_process(100, 1, None, "claude"),  // No TTY
+            create_process(100, 1, None, "claude"), // No TTY
         ];
         let tree = ProcessTree::build(processes);
 
@@ -294,17 +292,17 @@ mod tests {
 
     #[test]
     fn test_detect_custom_allowlist() {
-        let detector = ClaudeCodeDetector::new()
-            .with_process_names(vec!["myapp".to_string()]);
+        let detector = ClaudeCodeDetector::new().with_process_names(vec!["myapp".to_string()]);
         let pane = create_pane(1, Some("/dev/ttys001"));
 
-        let processes = vec![
-            create_process(100, 1, Some("ttys001"), "myapp"),
-        ];
+        let processes = vec![create_process(100, 1, Some("ttys001"), "myapp")];
         let tree = ProcessTree::build(processes);
 
         let result = detector.detect_by_tty_with_tree(&pane, &tree).unwrap();
-        assert!(matches!(result, Some(DetectionReason::DirectTtyMatch { .. })));
+        assert!(matches!(
+            result,
+            Some(DetectionReason::DirectTtyMatch { .. })
+        ));
     }
 
     #[test]

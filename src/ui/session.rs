@@ -28,7 +28,12 @@ pub fn status_display(status: &SessionStatus) -> (Color, String) {
 }
 
 /// Wrap text into lines with a given width.
-pub fn wrap_text_lines(text: &str, width: usize, max_lines: usize, color: Color) -> Vec<Line<'static>> {
+pub fn wrap_text_lines(
+    text: &str,
+    width: usize,
+    max_lines: usize,
+    color: Color,
+) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     for line in text.lines() {
         if line.is_empty() {
@@ -71,7 +76,9 @@ pub struct ClaudeSession {
 
 impl ClaudeSession {
     /// Detect session status, last prompt, and last output from pane's cwd transcript
-    pub fn detect_status_and_output(pane: &Pane) -> (SessionStatus, Option<String>, Option<String>) {
+    pub fn detect_status_and_output(
+        pane: &Pane,
+    ) -> (SessionStatus, Option<String>, Option<String>) {
         let cwd = match pane.cwd_path() {
             Some(cwd) => cwd,
             None => return (SessionStatus::Unknown, None, None),
