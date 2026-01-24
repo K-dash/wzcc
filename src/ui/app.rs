@@ -1,7 +1,8 @@
 use crate::cli::WeztermCli;
-use crate::datasource::{PaneDataSource, SystemProcessDataSource, WeztermDataSource};
+use crate::datasource::{PaneDataSource, ProcessDataSource, SystemProcessDataSource, WeztermDataSource};
 use crate::detector::{ClaudeCodeDetector, DetectionReason};
 use crate::models::Pane;
+use crate::transcript::{get_transcript_dir, get_latest_transcript, detect_session_status, SessionStatus};
 use anyhow::Result;
 use crossterm::{
     execute,
@@ -12,7 +13,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Terminal,
 };
 use std::io;
@@ -26,7 +27,12 @@ use super::event::{
 pub struct ClaudeSession {
     pub pane: Pane,
     pub detected: bool,
+    #[allow(dead_code)]
     pub reason: DetectionReason,
+    /// Session status (Processing/Idle/WaitingForUser/Unknown)
+    pub status: SessionStatus,
+    /// Git branch name
+    pub git_branch: Option<String>,
 }
 
 /// TUI アプリケーション
@@ -41,6 +47,8 @@ pub struct App {
     detector: ClaudeCodeDetector,
     /// dirty flag (再描画が必要か)
     dirty: bool,
+    /// リフレッシュ中フラグ
+    refreshing: bool,
 }
 
 impl Default for App {
@@ -61,15 +69,26 @@ impl App {
             process_ds: SystemProcessDataSource::new(),
             detector: ClaudeCodeDetector::new(),
             dirty: true,
+            refreshing: false,
         }
     }
 
     /// セッション一覧をリフレッシュ
     pub fn refresh(&mut self) -> Result<()> {
+        // 現在選択中の pane_id を保持
+        let selected_pane_id = self
+            .list_state
+            .selected()
+            .and_then(|i| self.sessions.get(i))
+            .map(|s| s.pane.pane_id);
+
         // 現在の workspace を取得
         let current_workspace = self.pane_ds.get_current_workspace()?;
 
         let panes = self.pane_ds.list_panes()?;
+
+        // プロセスツリーを1回だけ構築（最適化）
+        let process_tree = self.process_ds.build_tree()?;
 
         self.sessions = panes
             .into_iter()
@@ -79,21 +98,32 @@ impl App {
                     return None;
                 }
 
-                // Claude Code 検出を試みる
-                let reason = self.detector.detect_by_tty(&pane, &self.process_ds).ok()??;
+                // Claude Code 検出を試みる（プロセスツリーを再利用）
+                let reason = self.detector.detect_by_tty_with_tree(&pane, &process_tree).ok()??;
+
+                // セッション状態を取得
+                let status = Self::detect_status_for_pane(&pane);
+
+                // Git branch を取得
+                let git_branch = pane.cwd_path().and_then(|cwd| Self::get_git_branch(&cwd));
 
                 // 検出されたセッションのみ保持
                 Some(ClaudeSession {
                     pane,
                     detected: true,
                     reason,
+                    status,
+                    git_branch,
                 })
             })
             .collect();
 
-        // 選択をリセット
+        // 選択位置を維持（同じ pane_id があれば選択し直す）
         if !self.sessions.is_empty() {
-            self.list_state.select(Some(0));
+            let new_index = selected_pane_id
+                .and_then(|id| self.sessions.iter().position(|s| s.pane.pane_id == id))
+                .unwrap_or(0);
+            self.list_state.select(Some(new_index));
         } else {
             self.list_state.select(None);
         }
@@ -101,6 +131,44 @@ impl App {
         self.dirty = true;
 
         Ok(())
+    }
+
+    /// Pane の cwd からトランスクリプトを読んで状態を検出
+    fn detect_status_for_pane(pane: &Pane) -> SessionStatus {
+        let cwd = match pane.cwd_path() {
+            Some(cwd) => cwd,
+            None => return SessionStatus::Unknown,
+        };
+
+        let dir = match get_transcript_dir(&cwd) {
+            Some(dir) => dir,
+            None => return SessionStatus::Unknown,
+        };
+
+        let transcript_path = match get_latest_transcript(&dir) {
+            Ok(Some(path)) => path,
+            _ => return SessionStatus::Unknown,
+        };
+
+        detect_session_status(&transcript_path).unwrap_or(SessionStatus::Unknown)
+    }
+
+    /// cwd から git branch を取得
+    fn get_git_branch(cwd: &str) -> Option<String> {
+        use std::process::Command;
+
+        let output = Command::new("git")
+            .args(["-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"])
+            .output()
+            .ok()?;
+
+        if output.status.success() {
+            let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !branch.is_empty() {
+                return Some(branch);
+            }
+        }
+        None
     }
 
     /// 次のアイテムを選択
@@ -171,8 +239,8 @@ impl App {
         // 初回リフレッシュ
         self.refresh()?;
 
-        // イベントハンドラ (50ms tick)
-        let event_handler = EventHandler::new(50);
+        // イベントハンドラ (3秒ごとに自動更新)
+        let event_handler = EventHandler::new(3000);
 
         // メインループ
         let result = loop {
@@ -192,22 +260,23 @@ impl App {
                     } else if is_up_key(&key) {
                         self.select_previous();
                     } else if is_enter_key(&key) {
-                        // ジャンプを試みる
-                        if let Err(e) = self.jump_to_selected() {
-                            eprintln!("Jump failed: {}", e);
-                        }
-                        // ジャンプしたら TUI を終了
-                        break Ok(());
+                        // ジャンプを試みる（TUI は継続）
+                        let _ = self.jump_to_selected();
                     } else if is_refresh_key(&key) {
+                        // リフレッシュ中表示を出してから更新
+                        self.refreshing = true;
+                        self.dirty = true;
+                        terminal.draw(|f| self.render(f))?;
                         self.refresh()?;
+                        self.refreshing = false;
                     }
                 }
                 Event::Resize(_, _) => {
                     self.dirty = true;
                 }
                 Event::Tick => {
-                    // TODO: トースト通知の実装 (Phase 4 - 保留中)
-                    // 現在の実装では pane 切り替え後に描画が見えない問題がある
+                    // 3秒ごとに自動リフレッシュ（インジケータなし）
+                    self.refresh()?;
                 }
             }
         };
@@ -228,10 +297,10 @@ impl App {
         // pane 切り替え後に描画が見えない問題があるため一旦スキップ
         let main_area = size;
 
-        // 2カラムレイアウト (左: リスト 80%, 右: 詳細 20%)
+        // 2カラムレイアウト (左: リスト 40%, 右: 詳細 60%)
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(80), Constraint::Percentage(20)])
+            .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
             .split(main_area);
 
         self.render_list(f, chunks[0]);
@@ -246,25 +315,26 @@ impl App {
             .map(|session| {
                 let pane = &session.pane;
 
-                // アイコン
-                let icon = if pane.title.contains('✳') || pane.title.contains('✶') {
-                    "✳"
-                } else {
-                    "●"
+                // 状態アイコンと色
+                let (status_icon, status_color) = match &session.status {
+                    SessionStatus::Processing => ("●", Color::Yellow),
+                    SessionStatus::Idle => ("○", Color::Green),
+                    SessionStatus::WaitingForUser { .. } => ("◐", Color::Magenta),
+                    SessionStatus::Unknown => ("?", Color::DarkGray),
                 };
 
-                // タイトル (最大50文字)
-                let title = if pane.title.len() > 50 {
-                    format!("{}...", &pane.title[..47])
+                // タイトル (最大40文字)
+                let title = if pane.title.len() > 40 {
+                    format!("{}...", &pane.title[..37])
                 } else {
                     pane.title.clone()
                 };
 
                 let line = Line::from(vec![
                     Span::styled(
-                        format!("{} ", icon),
+                        format!("{} ", status_icon),
                         Style::default()
-                            .fg(Color::Green)
+                            .fg(status_color)
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
@@ -272,17 +342,28 @@ impl App {
                         Style::default().fg(Color::Cyan),
                     ),
                     Span::raw(title),
+                    Span::styled(
+                        format!(" [{}]", session.status.as_str()),
+                        Style::default().fg(status_color),
+                    ),
                 ]);
 
                 ListItem::new(line)
             })
             .collect();
 
+        // タイトル（リフレッシュ中はインジケータ表示）
+        let title = if self.refreshing {
+            " ⌛ Claude Code Sessions - Refreshing... ".to_string()
+        } else {
+            format!(" Claude Code Sessions ({}) ", self.sessions.len())
+        };
+
         let list = List::new(items)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(format!(" Claude Code Sessions ({}) ", self.sessions.len())),
+                    .title(title),
             )
             .highlight_style(
                 Style::default()
@@ -305,19 +386,6 @@ impl App {
                         Span::styled("Pane: ", Style::default().add_modifier(Modifier::BOLD)),
                         Span::raw(pane.pane_id.to_string()),
                     ]),
-                    Line::from(vec![
-                        Span::styled("Tab: ", Style::default().add_modifier(Modifier::BOLD)),
-                        Span::raw(pane.tab_id.to_string()),
-                    ]),
-                    Line::from(vec![
-                        Span::styled("Window: ", Style::default().add_modifier(Modifier::BOLD)),
-                        Span::raw(pane.window_id.to_string()),
-                    ]),
-                    Line::from(""),
-                    Line::from(vec![
-                        Span::styled("Workspace: ", Style::default().add_modifier(Modifier::BOLD)),
-                        Span::raw(&pane.workspace),
-                    ]),
                 ];
 
                 if let Some(cwd) = pane.cwd_path() {
@@ -337,15 +405,34 @@ impl App {
                     ]));
                 }
 
-                // Phase 2.3: 検出根拠を表示
+                // Phase 3: セッション状態を表示
                 lines.push(Line::from(""));
+                let (status_color, status_text) = match &session.status {
+                    SessionStatus::Processing => (Color::Yellow, "Processing"),
+                    SessionStatus::Idle => (Color::Green, "Idle"),
+                    SessionStatus::WaitingForUser { tools } => {
+                        let tools_str = if tools.is_empty() {
+                            "Approval".to_string()
+                        } else {
+                            format!("Approval ({})", tools.join(", "))
+                        };
+                        (Color::Magenta, Box::leak(tools_str.into_boxed_str()) as &str)
+                    }
+                    SessionStatus::Unknown => (Color::DarkGray, "Unknown"),
+                };
                 lines.push(Line::from(vec![
-                    Span::styled("Detection: ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled("Status: ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(status_text, Style::default().fg(status_color)),
                 ]));
-                lines.push(Line::from(vec![Span::styled(
-                    session.reason.display(),
-                    Style::default().fg(Color::Green),
-                )]));
+
+                // Git branch を表示
+                if let Some(branch) = &session.git_branch {
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(vec![
+                        Span::styled("Branch: ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::styled(branch, Style::default().fg(Color::Cyan)),
+                    ]));
+                }
 
                 lines
             } else {
@@ -355,8 +442,9 @@ impl App {
             vec![Line::from("No sessions")]
         };
 
-        let paragraph =
-            Paragraph::new(text).block(Block::default().borders(Borders::ALL).title(" Details "));
+        let paragraph = Paragraph::new(text)
+            .block(Block::default().borders(Borders::ALL).title(" Details "))
+            .wrap(Wrap { trim: false });
 
         f.render_widget(paragraph, area);
     }

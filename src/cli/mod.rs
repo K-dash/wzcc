@@ -42,6 +42,31 @@ impl WeztermCli {
 
         Ok(())
     }
+
+    /// 指定した pane のタブタイトルを変更
+    pub fn set_tab_title(pane_id: u32, title: &str) -> Result<()> {
+        let output = Command::new("wezterm")
+            .args([
+                "cli",
+                "set-tab-title",
+                "--pane-id",
+                &pane_id.to_string(),
+                title,
+            ])
+            .output()
+            .context("Failed to execute wezterm cli set-tab-title")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!(
+                "wezterm cli set-tab-title failed for pane {}: {}",
+                pane_id,
+                stderr
+            );
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]

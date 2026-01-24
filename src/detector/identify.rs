@@ -1,4 +1,4 @@
-use crate::datasource::{ProcessDataSource, ProcessInfo};
+use crate::datasource::{ProcessDataSource, ProcessInfo, ProcessTree};
 use crate::detector::DetectionReason;
 use crate::models::Pane;
 use anyhow::Result;
@@ -38,6 +38,16 @@ impl ClaudeCodeDetector {
         pane: &Pane,
         process_ds: &P,
     ) -> Result<Option<DetectionReason>> {
+        let tree = process_ds.build_tree()?;
+        self.detect_by_tty_with_tree(pane, &tree)
+    }
+
+    /// 事前構築済みのプロセスツリーを使って検出（パフォーマンス最適化版）
+    pub fn detect_by_tty_with_tree(
+        &self,
+        pane: &Pane,
+        tree: &ProcessTree,
+    ) -> Result<Option<DetectionReason>> {
         // 自分自身のペイン (wzcc を実行しているペイン) を除外
         if let Ok(current_pane_id) = std::env::var("WEZTERM_PANE") {
             if let Ok(current_id) = current_pane_id.parse::<u32>() {
@@ -52,9 +62,6 @@ impl ClaudeCodeDetector {
             Some(tty) => tty,
             None => return Ok(None),
         };
-
-        // 全プロセスを取得してツリーを構築
-        let tree = process_ds.build_tree()?;
 
         // TTY が一致するプロセスを検索
         for (pid, proc) in tree.processes.iter() {

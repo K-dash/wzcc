@@ -1,7 +1,7 @@
 pub mod process;
 pub mod wezterm;
 
-pub use process::{ProcessDataSource, ProcessInfo, SystemProcessDataSource};
+pub use process::{ProcessDataSource, ProcessInfo, ProcessTree, SystemProcessDataSource};
 pub use wezterm::WeztermDataSource;
 
 use crate::models::Pane;
