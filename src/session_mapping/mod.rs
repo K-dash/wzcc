@@ -194,6 +194,58 @@ impl SessionMapping {
 
         Ok(())
     }
+
+    /// Clean up mapping files for TTYs that no longer exist.
+    ///
+    /// This function removes mapping files for TTYs that are not in the
+    /// provided list of active TTYs. This is safe to call at startup
+    /// because it only removes mappings for TTYs that definitely don't
+    /// exist in the current WezTerm session.
+    ///
+    /// # Arguments
+    /// * `active_ttys` - List of TTY names currently in use (e.g., ["ttys001", "ttys005"])
+    ///
+    /// # Returns
+    /// Number of files removed
+    pub fn cleanup_inactive_ttys(active_ttys: &[String]) -> usize {
+        let sessions_dir = match Self::sessions_dir() {
+            Some(dir) => dir,
+            None => return 0,
+        };
+
+        if !sessions_dir.exists() {
+            return 0;
+        }
+
+        let mut removed_count = 0;
+
+        if let Ok(entries) = fs::read_dir(&sessions_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+
+                // Only consider .json files
+                if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                    continue;
+                }
+
+                // Extract TTY name from filename (e.g., "ttys001.json" -> "ttys001")
+                let tty_name = match path.file_stem().and_then(|s| s.to_str()) {
+                    Some(name) => name,
+                    None => continue,
+                };
+
+                // Check if this TTY is in the active list
+                if !active_ttys.iter().any(|t| t == tty_name) {
+                    // TTY not active, safe to remove
+                    if fs::remove_file(&path).is_ok() {
+                        removed_count += 1;
+                    }
+                }
+            }
+        }
+
+        removed_count
+    }
 }
 
 #[cfg(test)]
