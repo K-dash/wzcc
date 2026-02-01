@@ -248,13 +248,6 @@ pub fn read_last_entries(path: &Path, count: usize) -> Result<Vec<TranscriptEntr
     Ok(entries)
 }
 
-/// Read the last entry from a transcript file.
-#[allow(dead_code)]
-pub fn read_last_entry(path: &Path) -> Result<Option<TranscriptEntry>> {
-    let entries = read_last_entries(path, 1)?;
-    Ok(entries.into_iter().next())
-}
-
 /// A user message structure (content can be string or array).
 #[derive(Debug, Clone, Deserialize)]
 pub struct UserMessage {

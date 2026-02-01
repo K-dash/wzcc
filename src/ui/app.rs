@@ -152,17 +152,6 @@ impl App {
         Ok(())
     }
 
-    /// Check if there are pending file change events
-    fn has_file_changes(&self) -> bool {
-        if let Some(rx) = &self.file_change_rx {
-            // Drain all pending events
-            while rx.try_recv().is_ok() {}
-            // We just drained, so return true if we got any
-            // Actually, let's check if there's anything in the channel
-        }
-        false
-    }
-
     /// Drain file change events and return true if any were received
     fn drain_file_changes(&self) -> bool {
         let mut had_changes = false;

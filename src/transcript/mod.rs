@@ -11,4 +11,3 @@ mod watcher;
 pub use parser::{get_last_assistant_text, get_last_user_prompt, TranscriptEntry};
 pub use path::{encode_cwd, get_latest_transcript, get_transcript_dir};
 pub use state::{detect_session_status, SessionStatus};
-pub use watcher::TranscriptWatcher;
