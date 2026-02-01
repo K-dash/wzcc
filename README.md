@@ -201,31 +201,6 @@ flowchart TD
     end
 ```
 
-### Component Breakdown
-
-| Component | Responsibility |
-|-----------|-----------------|
-| **UI Layer** (`src/ui/`) | Event handling, rendering, state management |
-| **Session** (`src/ui/session.rs`) | Session data structure, status detection, transcript parsing |
-| **Detector** (`src/detector/`) | Claude Code identification via TTY matching & process trees |
-| **DataSource** (`src/datasource/`) | WezTerm pane & system process data retrieval |
-| **CLI** (`src/cli/`) | WezTerm command execution wrappers |
-| **Models** (`src/models/`) | Data structures (Pane, etc.) |
-| **Transcript** (`src/transcript/`) | Claude Code transcript parsing and analysis |
-| **Daemon** (`src/daemon/`) | Background monitoring (experimental) |
-
-### Detection Strategy: TTY Matching with Wrapper Support
-
-1. **Fetch Panes**: Get list of all WezTerm panes and their TTY assignments
-2. **Extract TTY**: For each pane, extract short TTY name (e.g., `ttys001` from `/dev/ttys001`)
-3. **Build Process Tree**: Run `ps` to collect all processes with PID, PPID, TTY, command, and args
-4. **Match Process**: For each pane, find processes with matching TTY
-5. **Check Allowlist**: Verify process command/args matches `["claude", "anthropic"]`
-6. **Wrapper Support**: If direct match fails, check if any ancestor process matches allowlist
-7. **Exclusion**: Exclude the pane running wzcc itself (via `WEZTERM_PANE` env var)
-
-**Accuracy**: ~90% detection rate without relying on unstable WezTerm fields.
-
 ### Session Status Detection
 
 wzcc reads Claude Code transcript files located in `~/.claude/projects/{encoded-cwd}/{session_id}.jsonl` (where `encoded-cwd` replaces `/`, `.`, and `_` with `-`) and examines the transcript structure to determine session status:
@@ -331,43 +306,6 @@ make lint
 
 # Run full CI checks (format check, lint, test)
 make ci
-```
-
-### Project Structure
-
-```
-wzcc/
-├── src/
-│   ├── main.rs                 # Entry point, CLI handling
-│   ├── lib.rs                  # Library exports
-│   ├── ui/
-│   │   ├── mod.rs              # UI module exports
-│   │   ├── app.rs              # Main app loop, event handling
-│   │   ├── session.rs          # ClaudeSession struct, status/output detection
-│   │   ├── render.rs           # Rendering functions (list, details)
-│   │   ├── event.rs            # Event definitions and key bindings
-│   │   └── toast.rs            # Toast notification support
-│   ├── detector/
-│   │   ├── mod.rs              # Detector exports
-│   │   └── identify.rs         # ClaudeCodeDetector, TTY matching logic
-│   ├── datasource/
-│   │   ├── mod.rs              # DataSource trait definitions
-│   │   ├── wezterm.rs          # WeztermDataSource (pane listing)
-│   │   └── process.rs          # SystemProcessDataSource, ProcessTree
-│   ├── models/
-│   │   ├── mod.rs              # Model exports
-│   │   └── pane.rs             # Pane struct definition
-│   ├── cli/
-│   │   └── mod.rs              # WeztermCli wrapper
-│   ├── transcript/
-│   │   ├── mod.rs              # Transcript module
-│   │   ├── parser.rs           # Parse Claude Code transcript files
-│   │   ├── state.rs            # SessionStatus enum
-│   │   ├── path.rs             # Transcript path resolution
-│   │   └── watcher.rs          # File change watching (experimental)
-│   └── daemon/
-│       └── mod.rs              # Daemon mode (experimental)
-└── Cargo.toml                  # Dependencies
 ```
 
 ## License
