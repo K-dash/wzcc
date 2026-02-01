@@ -9,6 +9,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
@@ -16,6 +17,8 @@ use ratatui::{
     Terminal,
 };
 use std::io;
+use std::path::PathBuf;
+use std::sync::mpsc::{channel, Receiver};
 
 use super::event::{
     is_down_key, is_enter_key, is_quit_key, is_refresh_key, is_up_key, Event, EventHandler,
@@ -47,6 +50,12 @@ pub struct App {
     last_click: Option<(std::time::Instant, usize)>,
     /// List area Rect (for click position calculation)
     list_area: Option<Rect>,
+    /// File watcher for transcript changes
+    _watcher: Option<RecommendedWatcher>,
+    /// Receiver for file change events
+    file_change_rx: Option<Receiver<PathBuf>>,
+    /// Currently watched directories
+    watched_dirs: Vec<PathBuf>,
 }
 
 impl Default for App {
@@ -73,7 +82,96 @@ impl App {
             prev_last_outputs: Vec::new(),
             last_click: None,
             list_area: None,
+            _watcher: None,
+            file_change_rx: None,
+            watched_dirs: Vec::new(),
         }
+    }
+
+    /// Setup file watcher for transcript directories
+    fn setup_watcher(&mut self) -> Result<()> {
+        let (tx, rx) = channel::<PathBuf>();
+
+        let watcher = RecommendedWatcher::new(
+            move |res: Result<notify::Event, notify::Error>| {
+                if let Ok(event) = res {
+                    // Only handle modify events for .jsonl files
+                    if event.kind.is_modify() {
+                        for path in event.paths {
+                            if path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
+                                let _ = tx.send(path);
+                            }
+                        }
+                    }
+                }
+            },
+            Config::default(),
+        )?;
+
+        self.file_change_rx = Some(rx);
+        self._watcher = Some(watcher);
+
+        Ok(())
+    }
+
+    /// Update watched directories based on current sessions
+    fn update_watched_dirs(&mut self) -> Result<()> {
+        use crate::transcript::get_transcript_dir;
+
+        let mut new_dirs: Vec<PathBuf> = Vec::new();
+
+        for session in &self.sessions {
+            if let Some(cwd) = session.pane.cwd_path() {
+                if let Some(dir) = get_transcript_dir(&cwd) {
+                    if dir.exists() && !new_dirs.contains(&dir) {
+                        new_dirs.push(dir);
+                    }
+                }
+            }
+        }
+
+        // Get reference to watcher
+        if let Some(watcher) = &mut self._watcher {
+            // Unwatch old dirs
+            for dir in &self.watched_dirs {
+                if !new_dirs.contains(dir) {
+                    let _ = watcher.unwatch(dir);
+                }
+            }
+
+            // Watch new dirs
+            for dir in &new_dirs {
+                if !self.watched_dirs.contains(dir) {
+                    let _ = watcher.watch(dir, RecursiveMode::NonRecursive);
+                }
+            }
+        }
+
+        self.watched_dirs = new_dirs;
+
+        Ok(())
+    }
+
+    /// Check if there are pending file change events
+    fn has_file_changes(&self) -> bool {
+        if let Some(rx) = &self.file_change_rx {
+            // Drain all pending events
+            while rx.try_recv().is_ok() {}
+            // We just drained, so return true if we got any
+            // Actually, let's check if there's anything in the channel
+        }
+        false
+    }
+
+    /// Drain file change events and return true if any were received
+    fn drain_file_changes(&self) -> bool {
+        let mut had_changes = false;
+        if let Some(rx) = &self.file_change_rx {
+            while rx.try_recv().is_ok() {
+                had_changes = true;
+            }
+        }
+        had_changes
     }
 
     /// Refresh session list
@@ -294,14 +392,43 @@ impl App {
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
+        // Setup file watcher
+        self.setup_watcher()?;
+
         // Initial refresh
         self.refresh()?;
 
-        // Event handler (auto-update every 3 seconds)
-        let event_handler = EventHandler::new(3000);
+        // Start watching transcript directories
+        self.update_watched_dirs()?;
+
+        // Event handler - shorter poll interval (100ms) since we're event-driven now
+        // This is just for keyboard/mouse events, not for status updates
+        let event_handler = EventHandler::new(100);
+
+        // Track last full refresh time (for new session detection)
+        let mut last_full_refresh = std::time::Instant::now();
+        let full_refresh_interval = std::time::Duration::from_secs(5);
 
         // Main loop
         let result = loop {
+            // Check for file changes from notify
+            if self.drain_file_changes() {
+                // File changed - refresh status only (not full session list)
+                self.refresh()?;
+
+                // Check for actual changes in output
+                let current_outputs: Vec<Option<String>> = self
+                    .sessions
+                    .iter()
+                    .map(|s| s.last_output.clone())
+                    .collect();
+
+                if current_outputs != self.prev_last_outputs {
+                    self.needs_full_redraw = true;
+                    self.prev_last_outputs = current_outputs;
+                }
+            }
+
             // Only draw when dirty flag is set
             if self.dirty {
                 // Clear terminal when full redraw is needed
@@ -398,19 +525,23 @@ impl App {
                     self.dirty = true;
                 }
                 Event::Tick => {
-                    // Auto-refresh every 3 seconds (no indicator)
-                    self.refresh()?;
+                    // Periodic full refresh for new session detection (every 5 seconds)
+                    if last_full_refresh.elapsed() >= full_refresh_interval {
+                        self.refresh()?;
+                        self.update_watched_dirs()?;
+                        last_full_refresh = std::time::Instant::now();
 
-                    // Full redraw only when last_output changes (prevent flickering)
-                    let current_outputs: Vec<Option<String>> = self
-                        .sessions
-                        .iter()
-                        .map(|s| s.last_output.clone())
-                        .collect();
+                        // Check for actual changes in output
+                        let current_outputs: Vec<Option<String>> = self
+                            .sessions
+                            .iter()
+                            .map(|s| s.last_output.clone())
+                            .collect();
 
-                    if current_outputs != self.prev_last_outputs {
-                        self.needs_full_redraw = true;
-                        self.prev_last_outputs = current_outputs;
+                        if current_outputs != self.prev_last_outputs {
+                            self.needs_full_redraw = true;
+                            self.prev_last_outputs = current_outputs;
+                        }
                     }
                 }
             }
