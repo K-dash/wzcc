@@ -213,6 +213,7 @@ impl App {
                     last_output: session_info.last_output,
                     session_id: session_info.session_id,
                     transcript_path: session_info.transcript_path,
+                    updated_at: session_info.updated_at,
                 })
             })
             .collect();

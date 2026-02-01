@@ -10,6 +10,7 @@ use ratatui::{
     text::{Line, Span},
 };
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 /// Get display color and text for a SessionStatus.
 pub fn status_display(status: &SessionStatus) -> (Color, String) {
@@ -78,6 +79,8 @@ pub struct ClaudeSession {
     pub session_id: Option<String>,
     /// Transcript path from statusLine bridge (if available)
     pub transcript_path: Option<PathBuf>,
+    /// Last updated time (from transcript file modification time)
+    pub updated_at: Option<SystemTime>,
 }
 
 /// Result of session info detection
@@ -89,9 +92,16 @@ pub struct SessionInfo {
     pub transcript_path: Option<PathBuf>,
     /// Whether this session was identified via statusLine bridge
     pub has_mapping: bool,
+    /// Last updated time (from transcript file modification time)
+    pub updated_at: Option<SystemTime>,
 }
 
 impl ClaudeSession {
+    /// Get file modification time
+    fn get_file_mtime(path: &PathBuf) -> Option<SystemTime> {
+        std::fs::metadata(path).ok()?.modified().ok()
+    }
+
     /// Detect session info from statusLine bridge mapping (TTY-based).
     ///
     /// This method tries to find session information using the TTY as the key.
@@ -104,10 +114,13 @@ impl ClaudeSession {
                 // We have a valid mapping - use the transcript path from it
                 let transcript_path = mapping.transcript_path.clone();
 
-                let status = if transcript_path.exists() {
-                    detect_session_status(&transcript_path).unwrap_or(SessionStatus::Unknown)
+                let (status, updated_at) = if transcript_path.exists() {
+                    let status =
+                        detect_session_status(&transcript_path).unwrap_or(SessionStatus::Unknown);
+                    let mtime = Self::get_file_mtime(&transcript_path);
+                    (status, mtime)
                 } else {
-                    SessionStatus::Ready
+                    (SessionStatus::Ready, None)
                 };
 
                 let last_prompt = if transcript_path.exists() {
@@ -131,12 +144,14 @@ impl ClaudeSession {
                     session_id: Some(mapping.session_id),
                     transcript_path: Some(transcript_path),
                     has_mapping: true,
+                    updated_at,
                 };
             }
         }
 
         // Fallback to CWD-based detection
-        let (status, last_prompt, last_output) = Self::detect_status_and_output_by_cwd(pane);
+        let (status, last_prompt, last_output, updated_at) =
+            Self::detect_status_and_output_by_cwd(pane);
 
         SessionInfo {
             status,
@@ -145,39 +160,33 @@ impl ClaudeSession {
             session_id: None,
             transcript_path: None,
             has_mapping: false,
+            updated_at,
         }
-    }
-
-    /// Detect session status, last prompt, and last output from pane's cwd transcript.
-    /// This is the legacy method that uses CWD to find the transcript directory.
-    pub fn detect_status_and_output(
-        pane: &Pane,
-    ) -> (SessionStatus, Option<String>, Option<String>) {
-        Self::detect_status_and_output_by_cwd(pane)
     }
 
     /// Internal: Detect session info by CWD (legacy method)
     fn detect_status_and_output_by_cwd(
         pane: &Pane,
-    ) -> (SessionStatus, Option<String>, Option<String>) {
+    ) -> (SessionStatus, Option<String>, Option<String>, Option<SystemTime>) {
         let cwd = match pane.cwd_path() {
             Some(cwd) => cwd,
-            None => return (SessionStatus::Unknown, None, None),
+            None => return (SessionStatus::Unknown, None, None, None),
         };
 
         let dir = match get_transcript_dir(&cwd) {
             Some(dir) => dir,
             // No transcript directory = Claude Code is running but no session yet
-            None => return (SessionStatus::Ready, None, None),
+            None => return (SessionStatus::Ready, None, None, None),
         };
 
         let transcript_path = match get_latest_transcript(&dir) {
             Ok(Some(path)) => path,
             // No transcript file = Claude Code is running but no session yet
-            _ => return (SessionStatus::Ready, None, None),
+            _ => return (SessionStatus::Ready, None, None, None),
         };
 
         let status = detect_session_status(&transcript_path).unwrap_or(SessionStatus::Unknown);
+        let updated_at = Self::get_file_mtime(&transcript_path);
 
         // Get last user prompt (max 200 chars)
         let last_prompt = get_last_user_prompt(&transcript_path, 200).ok().flatten();
@@ -187,7 +196,7 @@ impl ClaudeSession {
             .ok()
             .flatten();
 
-        (status, last_prompt, last_output)
+        (status, last_prompt, last_output, updated_at)
     }
 
     /// Get git branch from cwd

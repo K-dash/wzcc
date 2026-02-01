@@ -5,8 +5,29 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
+use std::time::SystemTime;
 
 use super::session::{status_display, wrap_text_lines, ClaudeSession};
+
+/// Format relative time (e.g., "5s ago", "2m ago", "1h ago")
+fn format_relative_time(time: &SystemTime) -> String {
+    let now = SystemTime::now();
+    let duration = match now.duration_since(*time) {
+        Ok(d) => d,
+        Err(_) => return "now".to_string(),
+    };
+
+    let secs = duration.as_secs();
+    if secs < 60 {
+        format!("{}s", secs)
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86400 {
+        format!("{}h", secs / 3600)
+    } else {
+        format!("{}d", secs / 86400)
+    }
+}
 
 /// Render the session list.
 pub fn render_list(
@@ -83,6 +104,13 @@ pub fn render_list(
             "   ".to_string()
         };
 
+        // Relative time display
+        let time_display = session
+            .updated_at
+            .as_ref()
+            .map(|t| format!(" {}", format_relative_time(t)))
+            .unwrap_or_default();
+
         // Indent (all sessions are indented)
         let line = Line::from(vec![
             Span::styled(
@@ -104,6 +132,7 @@ pub fn render_list(
                 format!(" [{}]", session.status.as_str()),
                 Style::default().fg(status_color),
             ),
+            Span::styled(time_display, Style::default().fg(Color::DarkGray)),
         ]);
 
         items.push(ListItem::new(line));
