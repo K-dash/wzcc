@@ -29,6 +29,30 @@ fn format_relative_time(time: &SystemTime) -> String {
     }
 }
 
+/// Get color for elapsed time display
+/// - < 5 minutes: Green (fresh/active)
+/// - 5-30 minutes: Yellow (slightly stale)
+/// - > 30 minutes: Red (inactive/stale)
+fn elapsed_time_color(time: &SystemTime) -> Color {
+    let now = SystemTime::now();
+    let duration = match now.duration_since(*time) {
+        Ok(d) => d,
+        Err(_) => return Color::Green,
+    };
+
+    let secs = duration.as_secs();
+    if secs < 300 {
+        // < 5 minutes
+        Color::Green
+    } else if secs < 1800 {
+        // 5-30 minutes
+        Color::Yellow
+    } else {
+        // > 30 minutes
+        Color::Red
+    }
+}
+
 /// Animation frames for Processing status (rotating dots)
 const PROCESSING_FRAMES: [&str; 4] = ["◐", "◓", "◑", "◒"];
 
@@ -68,16 +92,16 @@ pub fn render_list(
             current_ws = Some(ws.clone());
             current_cwd = None; // Reset cwd tracking for new workspace
 
-            // Visual distinction for current vs other workspace
+            // Visual distinction for current vs other workspace (subtle colors)
             let (ws_icon, ws_style) = if ws == current_workspace {
                 (
                     "🏠",
                     Style::default()
-                        .fg(Color::Green)
+                        .fg(Color::DarkGray)
                         .add_modifier(Modifier::BOLD),
                 )
             } else {
-                ("📍", Style::default().fg(Color::Yellow))
+                ("📍", Style::default().fg(Color::DarkGray))
             };
 
             let ws_header = Line::from(vec![Span::styled(
@@ -144,20 +168,22 @@ pub fn render_list(
             "   ".to_string()
         };
 
-        // Relative time display
-        let time_display = session
+        // Relative time display with color based on elapsed time
+        let (time_display, time_color) = session
             .updated_at
             .as_ref()
-            .map(|t| format!(" {}", format_relative_time(t)))
-            .unwrap_or_default();
+            .map(|t| {
+                (
+                    format!(" {}", format_relative_time(t)),
+                    elapsed_time_color(t),
+                )
+            })
+            .unwrap_or((String::new(), Color::DarkGray));
 
         // Indent (all sessions are indented under workspace + cwd headers)
         let line = Line::from(vec![
             Span::raw("    "), // Extra indent for hierarchy
-            Span::styled(
-                format!("{} ", quick_num),
-                Style::default().fg(Color::DarkGray),
-            ),
+            Span::styled(format!("{} ", quick_num), Style::default().fg(Color::White)),
             Span::styled(
                 format!("{} ", status_icon),
                 Style::default()
@@ -166,14 +192,14 @@ pub fn render_list(
             ),
             Span::styled(
                 format!("Pane {}: ", pane.pane_id),
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(Color::White),
             ),
             Span::raw(title),
             Span::styled(
                 format!(" [{}]", session.status.as_str()),
                 Style::default().fg(status_color),
             ),
-            Span::styled(time_display, Style::default().fg(Color::DarkGray)),
+            Span::styled(time_display, Style::default().fg(time_color)),
         ]);
 
         items.push(ListItem::new(line));
@@ -264,6 +290,14 @@ pub fn render_details(
                 Span::styled("Status: ", Style::default().add_modifier(Modifier::BOLD)),
                 Span::styled(status_text, Style::default().fg(status_color)),
             ]));
+
+            // Display warning message if present
+            if let Some(warning) = &session.warning {
+                lines.push(Line::from(vec![Span::styled(
+                    format!("⚠️  {}", warning),
+                    Style::default().fg(Color::Red),
+                )]));
+            }
 
             // Display git branch
             if let Some(branch) = &session.git_branch {

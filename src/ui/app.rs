@@ -215,6 +215,7 @@ impl App {
                     session_id: session_info.session_id,
                     transcript_path: session_info.transcript_path,
                     updated_at: session_info.updated_at,
+                    warning: session_info.warning,
                 })
             })
             .collect();
@@ -624,10 +625,10 @@ impl App {
         let main_area = vertical_chunks[0];
         let footer_area = vertical_chunks[1];
 
-        // 2-column layout (left: list 45%, right: details 55%)
+        // 2-column layout (left: list 55%, right: details 45%)
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
             .split(main_area);
 
         // Render list (update list_area)
