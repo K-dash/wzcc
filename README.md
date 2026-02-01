@@ -291,51 +291,6 @@ wzcc uninstall-bridge
 | Windows | ❌ Not supported |
 | Remote Mux | ❌ Not supported |
 
-## Development
-
-### Build
-
-```bash
-# Debug build
-cargo build
-
-# Release build (recommended)
-cargo build --release
-make release
-```
-
-### Run
-
-```bash
-# Run TUI
-cargo run
-
-# Run with debug output
-RUST_LOG=debug cargo run
-```
-
-### Testing & Code Quality
-
-```bash
-# Run all tests
-cargo test
-make test
-
-# Run specific test
-cargo test test_detect_wrapper_detected
-
-# Format code
-cargo fmt
-make fmt
-
-# Lint with clippy
-cargo clippy -- -D warnings
-make lint
-
-# Run full CI checks (format check, lint, test)
-make ci
-```
-
 ## License
 
 This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
