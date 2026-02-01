@@ -165,7 +165,7 @@ impl ClaudeSession {
                         has_mapping: false,
                         updated_at: None,
                         warning: Some(
-                            "Session info stale (statusLine not updating). Try restarting Claude Code.".to_string(),
+                            "Session info stale (statusLine not updating). Try interacting with the session.".to_string(),
                         ),
                     };
                 }
