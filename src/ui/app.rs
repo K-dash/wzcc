@@ -3,6 +3,7 @@ use crate::datasource::{
     PaneDataSource, ProcessDataSource, SystemProcessDataSource, WeztermDataSource,
 };
 use crate::detector::ClaudeCodeDetector;
+use crate::session_mapping::SessionMapping;
 use anyhow::Result;
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture, KeyCode, MouseButton, MouseEventKind},
@@ -118,6 +119,22 @@ impl App {
         self._watcher = Some(watcher);
 
         Ok(())
+    }
+
+    /// Clean up session mapping files for TTYs that no longer exist.
+    ///
+    /// This is called at startup to remove stale mappings from previous
+    /// WezTerm sessions. Only removes mappings for TTYs that are definitely
+    /// not in use by any current pane.
+    fn cleanup_inactive_session_mappings(&self) {
+        // Get list of all current TTYs from WezTerm
+        let active_ttys: Vec<String> = match self.pane_ds.list_panes() {
+            Ok(panes) => panes.iter().filter_map(|p| p.tty_short()).collect(),
+            Err(_) => return, // If we can't list panes, don't clean up anything
+        };
+
+        // Clean up mappings for inactive TTYs
+        SessionMapping::cleanup_inactive_ttys(&active_ttys);
     }
 
     /// Update watched directories based on current sessions
@@ -413,6 +430,10 @@ impl App {
 
     /// Run TUI
     pub fn run(&mut self) -> Result<()> {
+        // Clean up stale session mappings for TTYs that no longer exist
+        // This prevents stale data from affecting new sessions on the same TTY
+        self.cleanup_inactive_session_mappings();
+
         // Setup terminal
         enable_raw_mode()?;
         let mut stdout = io::stdout();
