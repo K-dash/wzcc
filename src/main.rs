@@ -19,6 +19,10 @@ enum Commands {
     Tui,
     /// Start daemon mode (background monitoring)
     Daemon,
+    /// Install all components (bridge + workspace-switcher)
+    Install,
+    /// Uninstall all components (bridge + workspace-switcher)
+    Uninstall,
     /// Install statusLine bridge for multi-session support
     InstallBridge,
     /// Uninstall statusLine bridge
@@ -39,6 +43,20 @@ fn main() -> Result<()> {
         }
         Some(Commands::Daemon) => {
             run_daemon()?;
+        }
+        Some(Commands::Install) => {
+            println!("Installing all wzcc components...\n");
+            install_bridge()?;
+            println!();
+            install_workspace_switcher()?;
+            println!("\n✓ All components installed successfully!");
+        }
+        Some(Commands::Uninstall) => {
+            println!("Uninstalling all wzcc components...\n");
+            uninstall_bridge()?;
+            println!();
+            uninstall_workspace_switcher()?;
+            println!("\n✓ All components uninstalled successfully!");
         }
         Some(Commands::InstallBridge) => {
             install_bridge()?;
