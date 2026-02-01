@@ -29,6 +29,9 @@ fn format_relative_time(time: &SystemTime) -> String {
     }
 }
 
+/// Animation frames for Processing status (rotating dots)
+const PROCESSING_FRAMES: [&str; 4] = ["◐", "◓", "◑", "◒"];
+
 /// Render the session list.
 pub fn render_list(
     f: &mut ratatui::Frame,
@@ -36,6 +39,7 @@ pub fn render_list(
     sessions: &[ClaudeSession],
     list_state: &mut ListState,
     refreshing: bool,
+    animation_frame: u8,
 ) -> Option<Rect> {
     // Count sessions per cwd
     let mut cwd_info: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -80,10 +84,12 @@ pub fn render_list(
             session_indices.push(usize::MAX); // Header is not a session
         }
 
-        // Status icon and color
+        // Status icon and color (Processing uses animated spinner)
         let (status_icon, status_color) = match &session.status {
             SessionStatus::Ready => ("◇", Color::Cyan),
-            SessionStatus::Processing => ("●", Color::Yellow),
+            SessionStatus::Processing => {
+                (PROCESSING_FRAMES[animation_frame as usize % 4], Color::Yellow)
+            }
             SessionStatus::Idle => ("○", Color::Green),
             SessionStatus::WaitingForUser { .. } => ("◐", Color::Magenta),
             SessionStatus::Unknown => ("?", Color::DarkGray),

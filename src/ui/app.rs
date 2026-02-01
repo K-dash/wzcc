@@ -56,6 +56,8 @@ pub struct App {
     file_change_rx: Option<Receiver<PathBuf>>,
     /// Currently watched directories
     watched_dirs: Vec<PathBuf>,
+    /// Animation frame counter for Processing status indicator (0-3)
+    animation_frame: u8,
 }
 
 impl Default for App {
@@ -85,6 +87,7 @@ impl App {
             _watcher: None,
             file_change_rx: None,
             watched_dirs: Vec::new(),
+            animation_frame: 0,
         }
     }
 
@@ -528,6 +531,18 @@ impl App {
                     self.dirty = true;
                 }
                 Event::Tick => {
+                    // Advance animation frame for Processing indicator
+                    self.animation_frame = (self.animation_frame + 1) % 4;
+
+                    // Trigger redraw if any session is Processing (for animation)
+                    let has_processing = self
+                        .sessions
+                        .iter()
+                        .any(|s| matches!(s.status, crate::transcript::SessionStatus::Processing));
+                    if has_processing {
+                        self.dirty = true;
+                    }
+
                     // Periodic full refresh for new session detection (every 5 seconds)
                     if last_full_refresh.elapsed() >= full_refresh_interval {
                         self.refresh()?;
@@ -588,6 +603,7 @@ impl App {
             &self.sessions,
             &mut self.list_state,
             self.refreshing,
+            self.animation_frame,
         );
 
         // Render details
