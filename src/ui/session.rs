@@ -167,7 +167,12 @@ impl ClaudeSession {
     /// Internal: Detect session info by CWD (legacy method)
     fn detect_status_and_output_by_cwd(
         pane: &Pane,
-    ) -> (SessionStatus, Option<String>, Option<String>, Option<SystemTime>) {
+    ) -> (
+        SessionStatus,
+        Option<String>,
+        Option<String>,
+        Option<SystemTime>,
+    ) {
         let cwd = match pane.cwd_path() {
             Some(cwd) => cwd,
             None => return (SessionStatus::Unknown, None, None, None),
