@@ -104,30 +104,6 @@ wzcc daemon
 
 ### Using wzcc
 
-Once the TUI launches:
-
-```
-┌─ Claude Code Sessions (3) ────────────┬─ Details ────────────────┐
-│ 📂 projects/app (2 sessions)          │ Pane: 92 [1]             │
-│>> [1] ◐ Pane 92: Docs [Waiting] 5s    │                          │
-│   [2] ● Pane 228: Coding [Idle] 2m    │ CWD:                     │
-│ 📂 develop/feature                    │ ~/hobby/wzcc             │
-│   [3] ○ Pane 235: Setup [Ready] 1h    │                          │
-│                                       │ TTY: /dev/ttys042        │
-│                                       │                          │
-│                                       │ Status: Waiting          │
-│                                       │                          │
-│                                       │ Branch: feature/docs     │
-│                                       │                          │
-│                                       │ Last prompt:             │
-│                                       │ > Generate README file   │
-│                                       │                          │
-│                                       │ Last output (preview):   │
-│                                       │ # Project README         │
-└───────────────────────────────────────┴──────────────────────────┘
-[↑↓/jk]Select [Enter]Focus [1-9]Quick [r]Refresh [q]Quit
-```
-
 **Keybindings:**
 
 | Key | Action |
