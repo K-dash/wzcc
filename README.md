@@ -19,8 +19,6 @@ A TUI tool to list and navigate Claude Code sessions running in WezTerm tabs/pan
   ◆ <a href="#architecture">Architecture</a>
 </p>
 
-<img width="1788" height="1072" alt="image" src="https://github.com/user-attachments/assets/dc57ceb8-75b9-4135-958e-4cb21953a3a1" />
-
 </div>
 
 ## What is wzcc?
