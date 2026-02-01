@@ -15,12 +15,39 @@ make lint         # cargo clippy -- -D warnings
 make test         # cargo test
 ```
 
-## Workflow
+## Git Workflow (MUST FOLLOW)
 
-- Always create a feature branch before making changes
-- Commit changes using conventional commits (feat:, fix:, docs:, etc.)
-- Create a PR to merge into main
-- IMPORTANT: Run `make all` before considering work complete
+⚠️ **NEVER commit directly to main. Always use feature branches.**
+
+1. **BEFORE any code changes**: Create a feature branch
+   ```bash
+   git checkout -b feat/your-feature-name
+   ```
+2. **After changes**: Run quality checks
+   ```bash
+   make all  # format + lint + test
+   ```
+3. **Update documentation**: If user-facing behavior changes, update README.md
+4. **Commit**: Use conventional commits (feat:, fix:, docs:, etc.)
+5. **Push and create PR**: Never merge directly to main
+   ```bash
+   git push -u origin <branch-name>
+   gh pr create
+   ```
+
+### Pre-Commit Checklist
+
+Before committing, verify:
+- [ ] On a feature branch (not main)?
+- [ ] `make all` passes?
+- [ ] README.md updated if needed?
+- [ ] PR will be created?
+
+## Instructions for Claude
+
+- Before committing, ALWAYS re-read this Workflow section
+- When user says "commit", first check current branch and create feature branch if on main
+- When user-facing behavior changes, proactively update README.md before committing
 
 ## Code Style
 
