@@ -1,3 +1,7 @@
+mod install_bridge;
+
+pub use install_bridge::{install_bridge, uninstall_bridge};
+
 use anyhow::{Context, Result};
 use std::process::Command;
 

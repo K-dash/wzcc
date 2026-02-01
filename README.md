@@ -246,12 +246,33 @@ This is a WezTerm CLI limitation, not a wzcc limitation.
 
 ### Multiple Sessions with Same Working Directory
 
-When multiple Claude Code sessions share the same working directory, wzcc cannot reliably display the last prompt and assistant response for those sessions. This is because session identification is based on transcript paths, which use encoded working directory names. In this case:
-- Session status detection still works correctly
-- Last prompt/output display is disabled to prevent confusion
-- Individual pane IDs remain accurate
+When multiple Claude Code sessions share the same working directory, wzcc needs additional setup to accurately display each session's status and output. Without the statusLine bridge, session identification relies on transcript paths using encoded working directory names, which cannot distinguish between multiple sessions in the same directory.
 
-This is a known limitation when using multiple Claude Code instances in the same project directory.
+**Solution: Install the statusLine bridge**
+
+```bash
+wzcc install-bridge
+```
+
+This command:
+1. Creates a bridge script at `~/.claude/wzcc_statusline_bridge.sh`
+2. Configures Claude Code's `statusLine.command` to use the bridge
+3. Preserves any existing statusLine configuration by chaining calls
+
+The bridge leverages Claude Code's statusLine feature (which updates every 300ms) to write session information keyed by TTY. This allows wzcc to accurately identify and display each session even when multiple sessions share the same CWD.
+
+**After installation**, restart your Claude Code sessions for the changes to take effect.
+
+**To uninstall:**
+
+```bash
+wzcc uninstall-bridge
+```
+
+**Without the bridge:**
+- Session status detection still works but may show wrong data for multi-CWD sessions
+- A message prompts you to run `wzcc install-bridge`
+- Individual pane IDs remain accurate
 
 ### Platform Support
 

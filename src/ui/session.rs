@@ -1,5 +1,6 @@
 use crate::detector::DetectionReason;
 use crate::models::Pane;
+use crate::session_mapping::SessionMapping;
 use crate::transcript::{
     detect_session_status, get_last_assistant_text, get_last_user_prompt, get_latest_transcript,
     get_transcript_dir, SessionStatus,
@@ -8,6 +9,7 @@ use ratatui::{
     style::{Color, Style},
     text::{Line, Span},
 };
+use std::path::PathBuf;
 
 /// Get display color and text for a SessionStatus.
 pub fn status_display(status: &SessionStatus) -> (Color, String) {
@@ -72,11 +74,90 @@ pub struct ClaudeSession {
     pub last_prompt: Option<String>,
     /// Last assistant output text (from transcript)
     pub last_output: Option<String>,
+    /// Session ID from statusLine bridge (if available)
+    pub session_id: Option<String>,
+    /// Transcript path from statusLine bridge (if available)
+    pub transcript_path: Option<PathBuf>,
+}
+
+/// Result of session info detection
+pub struct SessionInfo {
+    pub status: SessionStatus,
+    pub last_prompt: Option<String>,
+    pub last_output: Option<String>,
+    pub session_id: Option<String>,
+    pub transcript_path: Option<PathBuf>,
+    /// Whether this session was identified via statusLine bridge
+    pub has_mapping: bool,
 }
 
 impl ClaudeSession {
-    /// Detect session status, last prompt, and last output from pane's cwd transcript
+    /// Detect session info from statusLine bridge mapping (TTY-based).
+    ///
+    /// This method tries to find session information using the TTY as the key.
+    /// If a valid mapping exists, it uses the transcript_path from the mapping
+    /// instead of guessing based on CWD.
+    pub fn detect_session_info(pane: &Pane) -> SessionInfo {
+        // Try to get session mapping from TTY
+        if let Some(tty) = pane.tty_short() {
+            if let Some(mapping) = SessionMapping::from_tty(&tty) {
+                // We have a valid mapping - use the transcript path from it
+                let transcript_path = mapping.transcript_path.clone();
+
+                let status = if transcript_path.exists() {
+                    detect_session_status(&transcript_path).unwrap_or(SessionStatus::Unknown)
+                } else {
+                    SessionStatus::Ready
+                };
+
+                let last_prompt = if transcript_path.exists() {
+                    get_last_user_prompt(&transcript_path, 200).ok().flatten()
+                } else {
+                    None
+                };
+
+                let last_output = if transcript_path.exists() {
+                    get_last_assistant_text(&transcript_path, 1000)
+                        .ok()
+                        .flatten()
+                } else {
+                    None
+                };
+
+                return SessionInfo {
+                    status,
+                    last_prompt,
+                    last_output,
+                    session_id: Some(mapping.session_id),
+                    transcript_path: Some(transcript_path),
+                    has_mapping: true,
+                };
+            }
+        }
+
+        // Fallback to CWD-based detection
+        let (status, last_prompt, last_output) = Self::detect_status_and_output_by_cwd(pane);
+
+        SessionInfo {
+            status,
+            last_prompt,
+            last_output,
+            session_id: None,
+            transcript_path: None,
+            has_mapping: false,
+        }
+    }
+
+    /// Detect session status, last prompt, and last output from pane's cwd transcript.
+    /// This is the legacy method that uses CWD to find the transcript directory.
     pub fn detect_status_and_output(
+        pane: &Pane,
+    ) -> (SessionStatus, Option<String>, Option<String>) {
+        Self::detect_status_and_output_by_cwd(pane)
+    }
+
+    /// Internal: Detect session info by CWD (legacy method)
+    fn detect_status_and_output_by_cwd(
         pane: &Pane,
     ) -> (SessionStatus, Option<String>, Option<String>) {
         let cwd = match pane.cwd_path() {

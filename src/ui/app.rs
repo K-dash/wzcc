@@ -107,9 +107,8 @@ impl App {
                     .detect_by_tty_with_tree(&pane, &process_tree)
                     .ok()??;
 
-                // Get session status
-                let (status, last_prompt, last_output) =
-                    ClaudeSession::detect_status_and_output(&pane);
+                // Get session info (uses statusLine bridge if available, falls back to CWD-based)
+                let session_info = ClaudeSession::detect_session_info(&pane);
 
                 // Get git branch
                 let git_branch = pane
@@ -121,30 +120,42 @@ impl App {
                     pane,
                     detected: true,
                     reason,
-                    status,
+                    status: session_info.status,
                     git_branch,
-                    last_prompt,
-                    last_output,
+                    last_prompt: session_info.last_prompt,
+                    last_output: session_info.last_output,
+                    session_id: session_info.session_id,
+                    transcript_path: session_info.transcript_path,
                 })
             })
             .collect();
 
         // Cannot show last_output when multiple sessions share the same cwd
-        // Count sessions per cwd
+        // BUT only if they don't have statusLine bridge mapping (has_mapping = false)
+        // Count sessions per cwd (only those without mapping)
         let mut cwd_counts: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
         for session in &self.sessions {
-            if let Some(cwd) = session.pane.cwd_path() {
-                *cwd_counts.entry(cwd).or_insert(0) += 1;
+            // Only count sessions without statusLine mapping
+            if session.session_id.is_none() {
+                if let Some(cwd) = session.pane.cwd_path() {
+                    *cwd_counts.entry(cwd).or_insert(0) += 1;
+                }
             }
         }
 
-        // Clear last_prompt/last_output for sessions with duplicate cwd
+        // Clear last_prompt/last_output for sessions with duplicate cwd (without mapping)
         for session in &mut self.sessions {
+            // Skip sessions that have statusLine mapping - they are already accurate
+            if session.session_id.is_some() {
+                continue;
+            }
+
             if let Some(cwd) = session.pane.cwd_path() {
                 if cwd_counts.get(&cwd).copied().unwrap_or(0) > 1 {
                     session.last_prompt = None;
-                    session.last_output = Some("Multiple sessions share this CWD 😢".to_string());
+                    session.last_output =
+                        Some("Run `wzcc install-bridge` for multi-session support".to_string());
                 }
             }
         }

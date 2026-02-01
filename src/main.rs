@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use wzcc::cli::{install_bridge, uninstall_bridge};
 use wzcc::ui::App;
 
 #[derive(Parser)]
@@ -16,6 +17,10 @@ enum Commands {
     Tui,
     /// Start daemon mode (background monitoring)
     Daemon,
+    /// Install statusLine bridge for multi-session support
+    InstallBridge,
+    /// Uninstall statusLine bridge
+    UninstallBridge,
 }
 
 fn main() -> Result<()> {
@@ -28,6 +33,12 @@ fn main() -> Result<()> {
         }
         Some(Commands::Daemon) => {
             run_daemon()?;
+        }
+        Some(Commands::InstallBridge) => {
+            install_bridge()?;
+        }
+        Some(Commands::UninstallBridge) => {
+            uninstall_bridge()?;
         }
     }
 
