@@ -1,6 +1,6 @@
 use crate::detector::DetectionReason;
 use crate::models::Pane;
-use crate::session_mapping::SessionMapping;
+use crate::session_mapping::{MappingResult, SessionMapping};
 use crate::transcript::{
     detect_session_status, get_last_assistant_text, get_last_user_prompt, get_latest_transcript,
     get_transcript_dir, SessionStatus,
@@ -81,6 +81,8 @@ pub struct ClaudeSession {
     pub transcript_path: Option<PathBuf>,
     /// Last updated time (from transcript file modification time)
     pub updated_at: Option<SystemTime>,
+    /// Warning message to display in details
+    pub warning: Option<String>,
 }
 
 /// Result of session info detection
@@ -94,6 +96,8 @@ pub struct SessionInfo {
     pub has_mapping: bool,
     /// Last updated time (from transcript file modification time)
     pub updated_at: Option<SystemTime>,
+    /// Warning message to display (e.g., stale mapping)
+    pub warning: Option<String>,
 }
 
 impl ClaudeSession {
@@ -110,42 +114,64 @@ impl ClaudeSession {
     pub fn detect_session_info(pane: &Pane) -> SessionInfo {
         // Try to get session mapping from TTY
         if let Some(tty) = pane.tty_short() {
-            if let Some(mapping) = SessionMapping::from_tty(&tty) {
-                // We have a valid mapping - use the transcript path from it
-                let transcript_path = mapping.transcript_path.clone();
+            match SessionMapping::from_tty_with_status(&tty) {
+                MappingResult::Valid(mapping) => {
+                    // We have a valid mapping - use the transcript path from it
+                    let transcript_path = mapping.transcript_path.clone();
 
-                let (status, updated_at) = if transcript_path.exists() {
-                    let status =
-                        detect_session_status(&transcript_path).unwrap_or(SessionStatus::Unknown);
-                    let mtime = Self::get_file_mtime(&transcript_path);
-                    (status, mtime)
-                } else {
-                    (SessionStatus::Ready, None)
-                };
+                    let (status, updated_at) = if transcript_path.exists() {
+                        let status = detect_session_status(&transcript_path)
+                            .unwrap_or(SessionStatus::Unknown);
+                        let mtime = Self::get_file_mtime(&transcript_path);
+                        (status, mtime)
+                    } else {
+                        (SessionStatus::Ready, None)
+                    };
 
-                let last_prompt = if transcript_path.exists() {
-                    get_last_user_prompt(&transcript_path, 200).ok().flatten()
-                } else {
-                    None
-                };
+                    let last_prompt = if transcript_path.exists() {
+                        get_last_user_prompt(&transcript_path, 200).ok().flatten()
+                    } else {
+                        None
+                    };
 
-                let last_output = if transcript_path.exists() {
-                    get_last_assistant_text(&transcript_path, 1000)
-                        .ok()
-                        .flatten()
-                } else {
-                    None
-                };
+                    let last_output = if transcript_path.exists() {
+                        get_last_assistant_text(&transcript_path, 1000)
+                            .ok()
+                            .flatten()
+                    } else {
+                        None
+                    };
 
-                return SessionInfo {
-                    status,
-                    last_prompt,
-                    last_output,
-                    session_id: Some(mapping.session_id),
-                    transcript_path: Some(transcript_path),
-                    has_mapping: true,
-                    updated_at,
-                };
+                    return SessionInfo {
+                        status,
+                        last_prompt,
+                        last_output,
+                        session_id: Some(mapping.session_id),
+                        transcript_path: Some(transcript_path),
+                        has_mapping: true,
+                        updated_at,
+                        warning: None,
+                    };
+                }
+                MappingResult::Stale => {
+                    // Mapping exists but is stale - don't fallback to CWD
+                    // This prevents showing wrong status from another session with same CWD
+                    return SessionInfo {
+                        status: SessionStatus::Unknown,
+                        last_prompt: None,
+                        last_output: None,
+                        session_id: None,
+                        transcript_path: None,
+                        has_mapping: false,
+                        updated_at: None,
+                        warning: Some(
+                            "Session info stale (statusLine not updating). Try restarting Claude Code.".to_string(),
+                        ),
+                    };
+                }
+                MappingResult::NotFound => {
+                    // No mapping - fall through to CWD-based detection
+                }
             }
         }
 
@@ -161,6 +187,7 @@ impl ClaudeSession {
             transcript_path: None,
             has_mapping: false,
             updated_at,
+            warning: None,
         }
     }
 

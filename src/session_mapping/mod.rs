@@ -25,6 +25,17 @@ pub struct SessionMapping {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Result of reading a session mapping
+#[derive(Debug, Clone)]
+pub enum MappingResult {
+    /// Valid, fresh mapping
+    Valid(SessionMapping),
+    /// Mapping exists but is stale (>5 minutes old)
+    Stale,
+    /// No mapping exists for this TTY
+    NotFound,
+}
+
 impl SessionMapping {
     /// Get the sessions directory path (~/.claude/wzcc/sessions/)
     pub fn sessions_dir() -> Option<PathBuf> {
@@ -48,29 +59,53 @@ impl SessionMapping {
     /// * `Some(SessionMapping)` if a valid mapping exists and is not stale
     /// * `None` if no mapping exists, is invalid, or is stale (>5 minutes old)
     pub fn from_tty(tty: &str) -> Option<Self> {
+        match Self::from_tty_with_status(tty) {
+            MappingResult::Valid(mapping) => Some(mapping),
+            _ => None,
+        }
+    }
+
+    /// Read session mapping from a TTY with detailed status.
+    ///
+    /// # Arguments
+    /// * `tty` - TTY name (e.g., "ttys003" or "/dev/ttys003")
+    ///
+    /// # Returns
+    /// * `MappingResult::Valid(mapping)` if a valid mapping exists and is fresh
+    /// * `MappingResult::Stale` if mapping exists but is >5 minutes old
+    /// * `MappingResult::NotFound` if no mapping exists or is invalid
+    pub fn from_tty_with_status(tty: &str) -> MappingResult {
         // Normalize TTY name (remove /dev/ prefix if present)
         let tty_short = tty.strip_prefix("/dev/").unwrap_or(tty);
 
-        let path = Self::mapping_file_path(tty_short)?;
+        let path = match Self::mapping_file_path(tty_short) {
+            Some(p) => p,
+            None => return MappingResult::NotFound,
+        };
 
         if !path.exists() {
-            return None;
+            return MappingResult::NotFound;
         }
 
-        let content = fs::read_to_string(&path).ok()?;
-        let mapping: SessionMapping = serde_json::from_str(&content).ok()?;
+        let content = match fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => return MappingResult::NotFound,
+        };
+
+        let mapping: SessionMapping = match serde_json::from_str(&content) {
+            Ok(m) => m,
+            Err(_) => return MappingResult::NotFound,
+        };
 
         // Check if mapping is stale (>5 minutes old)
         // statusLine updates every 300ms, so 5 minutes without update means session is gone
         let now = Utc::now();
         let age = now.signed_duration_since(mapping.updated_at);
         if age.num_minutes() > 5 {
-            // Stale mapping, remove it
-            let _ = fs::remove_file(&path);
-            return None;
+            return MappingResult::Stale;
         }
 
-        Some(mapping)
+        MappingResult::Valid(mapping)
     }
 
     /// Read all valid session mappings from the sessions directory.

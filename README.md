@@ -191,7 +191,21 @@ wzcc reads Claude Code transcript files located in `~/.claude/projects/{encoded-
 | `Idle` | Last entry is assistant response, end_turn marker, turn_duration, or stop_hook_summary |
 | `Waiting` | Tool use pending user approval (>10 seconds elapsed) |
 | `Ready` | Fresh session with no meaningful entries yet |
-| `Unknown` | Transcript parsing failed or status cannot be determined |
+| `Unknown` | Transcript parsing failed, status cannot be determined, or statusLine bridge is stale |
+
+### When Status Becomes Unknown (Stale Sessions)
+
+When using the statusLine bridge, wzcc tracks session information via TTY-keyed mapping files that are updated every 300ms. If a mapping file hasn't been updated for more than **5 minutes**, the session is considered "stale" and its status will show as `Unknown` with a warning message.
+
+**Common causes of stale sessions:**
+
+| Cause | Solution |
+|-------|----------|
+| Claude Code session was closed | Normal behavior - mapping will be cleaned up |
+| `settings.json` was modified after session started | Restart the Claude Code session to pick up new settings |
+| statusLine command is failing | Check `~/.claude/wzcc_statusline_bridge.sh` for errors |
+
+**Why this matters:** Without stale detection, sessions sharing the same working directory could display incorrect status from another session's transcript. The stale check prevents this by showing `Unknown` instead of potentially wrong information.
 
 ## Limitations
 
