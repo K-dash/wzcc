@@ -195,6 +195,22 @@ wzcc reads Claude Code transcript files located in `~/.claude/projects/{encoded-
 
 ## Limitations
 
+### Quick Setup (Recommended)
+
+For the best experience, install all optional components with a single command:
+
+```bash
+wzcc install
+```
+
+This installs both the workspace switcher and the statusLine bridge. To uninstall all components:
+
+```bash
+wzcc uninstall
+```
+
+See below for details on what each component does.
+
 ### Cross-Workspace Navigation
 
 wzcc displays sessions from **all workspaces** and can switch between them. However, this requires a one-time setup since WezTerm CLI doesn't provide a native workspace switch command.
@@ -203,6 +219,7 @@ wzcc displays sessions from **all workspaces** and can switch between them. Howe
 
 ```bash
 wzcc install-workspace-switcher
+# Or use: wzcc install (installs all components)
 ```
 
 This command injects a Lua snippet into your `wezterm.lua` that listens for OSC 1337 escape sequences and performs workspace switches.
@@ -227,6 +244,7 @@ When multiple Claude Code sessions share the same working directory, wzcc needs 
 
 ```bash
 wzcc install-bridge
+# Or use: wzcc install (installs all components)
 ```
 
 This command:
