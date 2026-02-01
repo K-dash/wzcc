@@ -40,28 +40,61 @@ pub fn render_list(
     list_state: &mut ListState,
     refreshing: bool,
     animation_frame: u8,
+    current_workspace: &str,
 ) -> Option<Rect> {
-    // Count sessions per cwd
-    let mut cwd_info: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    // Count sessions per (workspace, cwd)
+    let mut cwd_info: std::collections::HashMap<(String, String), usize> =
+        std::collections::HashMap::new();
     for session in sessions {
+        let ws = session.pane.workspace.clone();
         if let Some(cwd) = session.pane.cwd_path() {
-            *cwd_info.entry(cwd).or_insert(0) += 1;
+            *cwd_info.entry((ws, cwd)).or_insert(0) += 1;
         }
     }
 
-    // Build list items (header + sessions)
+    // Build list items (workspace header + cwd header + sessions)
     let mut items: Vec<ListItem> = Vec::new();
     let mut session_indices: Vec<usize> = Vec::new(); // ListItem index -> session index mapping
+    let mut current_ws: Option<String> = None;
     let mut current_cwd: Option<String> = None;
 
     for (session_idx, session) in sessions.iter().enumerate() {
         let pane = &session.pane;
+        let ws = &pane.workspace;
         let cwd = pane.cwd_path().unwrap_or_default();
 
-        // Get group info
-        let count = cwd_info.get(&cwd).copied().unwrap_or(1);
+        // Add workspace header for new workspace
+        if current_ws.as_ref() != Some(ws) {
+            current_ws = Some(ws.clone());
+            current_cwd = None; // Reset cwd tracking for new workspace
 
-        // Add header for new CWD
+            // Visual distinction for current vs other workspace
+            let (ws_icon, ws_style) = if ws == current_workspace {
+                (
+                    "🏠",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                ("📍", Style::default().fg(Color::Yellow))
+            };
+
+            let ws_header = Line::from(vec![Span::styled(
+                format!("{} Workspace: {}", ws_icon, ws),
+                ws_style,
+            )]);
+            items.push(ListItem::new(ws_header));
+            session_indices.push(usize::MAX); // Header is not a session
+        }
+
+        // Get group info
+        let count = cwd_info
+            .get(&(ws.clone(), cwd.clone()))
+            .copied()
+            .unwrap_or(1);
+
+        // Add header for new CWD (within the same workspace)
         if current_cwd.as_ref() != Some(&cwd) {
             current_cwd = Some(cwd.clone());
 
@@ -74,9 +107,9 @@ pub fn render_list(
 
             // Show session count if multiple sessions
             let header_text = if count > 1 {
-                format!("📂 {} ({} sessions)", dir_name, count)
+                format!("  📂 {} ({} sessions)", dir_name, count)
             } else {
-                format!("📂 {}", dir_name)
+                format!("  📂 {}", dir_name)
             };
 
             let header_line = Line::from(vec![Span::raw(header_text)]);
@@ -118,8 +151,9 @@ pub fn render_list(
             .map(|t| format!(" {}", format_relative_time(t)))
             .unwrap_or_default();
 
-        // Indent (all sessions are indented)
+        // Indent (all sessions are indented under workspace + cwd headers)
         let line = Line::from(vec![
+            Span::raw("    "), // Extra indent for hierarchy
             Span::styled(
                 format!("{} ", quick_num),
                 Style::default().fg(Color::DarkGray),
@@ -199,6 +233,13 @@ pub fn render_details(
                 Span::styled(quick_num_display, Style::default().fg(Color::DarkGray)),
             ])];
 
+            // Display workspace
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled("Workspace: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(&pane.workspace, Style::default().fg(Color::Yellow)),
+            ]));
+
             if let Some(cwd) = pane.cwd_path() {
                 lines.push(Line::from(""));
                 lines.push(Line::from(vec![Span::styled(
@@ -234,8 +275,8 @@ pub fn render_details(
             }
 
             // Display last prompt and last output preview
-            // Fixed lines: Pane(2) + CWD(3) + TTY(2) + Status(2) + Branch(2) + border(2) = ~13 lines
-            let fixed_lines: u16 = 13;
+            // Fixed lines: Pane(2) + Workspace(2) + CWD(3) + TTY(2) + Status(2) + Branch(2) + border(2) = ~15 lines
+            let fixed_lines: u16 = 15;
             let available_for_preview = area.height.saturating_sub(fixed_lines) as usize;
             let inner_width = (area.width.saturating_sub(2)) as usize;
 

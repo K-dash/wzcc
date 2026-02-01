@@ -1,4 +1,4 @@
-use crate::cli::WeztermCli;
+use crate::cli::{switch_workspace, WeztermCli};
 use crate::datasource::{
     PaneDataSource, ProcessDataSource, SystemProcessDataSource, WeztermDataSource,
 };
@@ -58,6 +58,8 @@ pub struct App {
     watched_dirs: Vec<PathBuf>,
     /// Animation frame counter for Processing status indicator (0-3)
     animation_frame: u8,
+    /// Current workspace name (for detecting cross-workspace jumps)
+    current_workspace: String,
 }
 
 impl Default for App {
@@ -88,6 +90,7 @@ impl App {
             file_change_rx: None,
             watched_dirs: Vec::new(),
             animation_frame: 0,
+            current_workspace: String::new(),
         }
     }
 
@@ -175,8 +178,8 @@ impl App {
             .and_then(|i| self.sessions.get(i))
             .map(|s| s.pane.pane_id);
 
-        // Get current workspace
-        let current_workspace = self.pane_ds.get_current_workspace()?;
+        // Get current workspace (for cross-workspace jump detection)
+        self.current_workspace = self.pane_ds.get_current_workspace()?;
 
         let panes = self.pane_ds.list_panes()?;
 
@@ -186,11 +189,6 @@ impl App {
         self.sessions = panes
             .into_iter()
             .filter_map(|pane| {
-                // Filter by current workspace only
-                if pane.workspace != current_workspace {
-                    return None;
-                }
-
                 // Try to detect Claude Code (reusing process tree)
                 let reason = self
                     .detector
@@ -251,11 +249,27 @@ impl App {
             }
         }
 
-        // Group by cwd (sort)
+        // Sort by workspace → cwd → pane_id
+        // Current workspace comes first
+        let current_ws = self.current_workspace.clone();
         self.sessions.sort_by(|a, b| {
-            let cwd_a = a.pane.cwd_path().unwrap_or_default();
-            let cwd_b = b.pane.cwd_path().unwrap_or_default();
-            cwd_a.cmp(&cwd_b).then(a.pane.pane_id.cmp(&b.pane.pane_id))
+            // Current workspace should come first
+            let ws_a_is_current = a.pane.workspace == current_ws;
+            let ws_b_is_current = b.pane.workspace == current_ws;
+            match (ws_a_is_current, ws_b_is_current) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => {
+                    // Same priority, sort by workspace name, then cwd, then pane_id
+                    let ws_a = &a.pane.workspace;
+                    let ws_b = &b.pane.workspace;
+                    let cwd_a = a.pane.cwd_path().unwrap_or_default();
+                    let cwd_b = b.pane.cwd_path().unwrap_or_default();
+                    ws_a.cmp(ws_b)
+                        .then(cwd_a.cmp(&cwd_b))
+                        .then(a.pane.pane_id.cmp(&b.pane.pane_id))
+                }
+            }
         });
 
         // Maintain selection position (reselect if same pane_id exists)
@@ -336,6 +350,12 @@ impl App {
         if let Some(i) = self.list_state.selected() {
             if let Some(session) = self.sessions.get(i) {
                 let pane_id = session.pane.pane_id;
+                let target_workspace = &session.pane.workspace;
+
+                // Switch workspace if needed
+                if target_workspace != &self.current_workspace {
+                    switch_workspace(target_workspace)?;
+                }
 
                 // Activate pane
                 WeztermCli::activate_pane(pane_id)?;
@@ -350,15 +370,29 @@ impl App {
     fn row_to_session_index(&self, row: usize) -> Option<usize> {
         // Map row number to session index
         let mut current_row = 0;
+        let mut current_ws: Option<String> = None;
         let mut current_cwd: Option<String> = None;
 
         for (session_idx, session) in self.sessions.iter().enumerate() {
+            let ws = &session.pane.workspace;
             let cwd = session.pane.cwd_path().unwrap_or_default();
+
+            // Add header row for new workspace
+            if current_ws.as_ref() != Some(ws) {
+                current_ws = Some(ws.clone());
+                current_cwd = None; // Reset cwd for new workspace
+                                    // Workspace header row
+                if current_row == row {
+                    // Ignore header click (not a session)
+                    return None;
+                }
+                current_row += 1;
+            }
 
             // Add header row for new CWD
             if current_cwd.as_ref() != Some(&cwd) {
                 current_cwd = Some(cwd.clone());
-                // Header row
+                // CWD header row
                 if current_row == row {
                     // Ignore header click (not a session)
                     return None;
@@ -604,6 +638,7 @@ impl App {
             &mut self.list_state,
             self.refreshing,
             self.animation_frame,
+            &self.current_workspace,
         );
 
         // Render details

@@ -54,6 +54,8 @@ wzcc simplifies management of multiple Claude Code sessions in WezTerm. Instead 
 - **Pane Details**: Displays pane ID, working directory, TTY, status, and git branch
 
 ### User Interface
+- **Multi-Workspace Support**: Shows sessions from all workspaces, grouped with visual hierarchy (🏠 current, 📍 others)
+- **Cross-Workspace Navigation**: Jump to sessions in different workspaces with automatic workspace switching
 - **Real-time Updates**: Uses `notify` crate to watch transcript files for changes - status updates instantly without polling
 - **Efficient Rendering**: Event-driven, only redraws when state changes
 - **Quick Select**: Press `1-9` to instantly jump to a session (numbers shown in list)
@@ -193,14 +195,29 @@ wzcc reads Claude Code transcript files located in `~/.claude/projects/{encoded-
 
 ## Limitations
 
-### Workspace Scope
+### Cross-Workspace Navigation
 
-wzcc only displays and manages sessions in your **current WezTerm workspace**. WezTerm CLI doesn't provide workspace switching commands, so:
+wzcc displays sessions from **all workspaces** and can switch between them. However, this requires a one-time setup since WezTerm CLI doesn't provide a native workspace switch command.
 
-1. Switch workspace manually in WezTerm UI
-2. Run `wzcc` again to show sessions in that workspace
+**Solution: Install the workspace switcher**
 
-This is a WezTerm CLI limitation, not a wzcc limitation.
+```bash
+wzcc install-workspace-switcher
+```
+
+This command injects a Lua snippet into your `wezterm.lua` that listens for OSC 1337 escape sequences and performs workspace switches.
+
+**After installation**, restart WezTerm or reload config (`Ctrl+Shift+R`) for changes to take effect.
+
+**To uninstall:**
+
+```bash
+wzcc uninstall-workspace-switcher
+```
+
+**Without the switcher:**
+- Sessions from all workspaces are still displayed
+- Jumping to a session in a different workspace will activate the pane but not switch the workspace view
 
 ### Multiple Sessions with Same Working Directory
 
