@@ -1,6 +1,8 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use wzcc::cli::{install_bridge, uninstall_bridge};
+use wzcc::cli::{
+    install_bridge, install_workspace_switcher, uninstall_bridge, uninstall_workspace_switcher,
+};
 use wzcc::ui::App;
 
 #[derive(Parser)]
@@ -21,6 +23,10 @@ enum Commands {
     InstallBridge,
     /// Uninstall statusLine bridge
     UninstallBridge,
+    /// Install workspace switcher for cross-workspace navigation
+    InstallWorkspaceSwitcher,
+    /// Uninstall workspace switcher
+    UninstallWorkspaceSwitcher,
 }
 
 fn main() -> Result<()> {
@@ -39,6 +45,12 @@ fn main() -> Result<()> {
         }
         Some(Commands::UninstallBridge) => {
             uninstall_bridge()?;
+        }
+        Some(Commands::InstallWorkspaceSwitcher) => {
+            install_workspace_switcher()?;
+        }
+        Some(Commands::UninstallWorkspaceSwitcher) => {
+            uninstall_workspace_switcher()?;
         }
     }
 

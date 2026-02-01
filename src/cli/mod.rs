@@ -1,6 +1,10 @@
 mod install_bridge;
+mod install_workspace_switcher;
 
 pub use install_bridge::{install_bridge, uninstall_bridge};
+pub use install_workspace_switcher::{
+    install_workspace_switcher, switch_workspace, uninstall_workspace_switcher,
+};
 
 use anyhow::{Context, Result};
 use std::process::Command;
