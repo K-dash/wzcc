@@ -369,14 +369,22 @@ impl App {
             if let Some(session) = self.sessions.get(i) {
                 let pane_id = session.pane.pane_id;
                 let target_workspace = &session.pane.workspace;
+                let switching_workspace = target_workspace != &self.current_workspace;
 
                 // Switch workspace if needed
-                if target_workspace != &self.current_workspace {
+                if switching_workspace {
                     switch_workspace(target_workspace)?;
                 }
 
                 // Activate pane
                 WeztermCli::activate_pane(pane_id)?;
+
+                // Refresh session list after workspace switch to update ordering
+                if switching_workspace {
+                    // Small delay to allow WezTerm to complete workspace switch
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    self.refresh()?;
+                }
             }
         }
 
