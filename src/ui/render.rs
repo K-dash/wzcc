@@ -87,9 +87,10 @@ pub fn render_list(
         // Status icon and color (Processing uses animated spinner)
         let (status_icon, status_color) = match &session.status {
             SessionStatus::Ready => ("◇", Color::Cyan),
-            SessionStatus::Processing => {
-                (PROCESSING_FRAMES[animation_frame as usize % 4], Color::Yellow)
-            }
+            SessionStatus::Processing => (
+                PROCESSING_FRAMES[animation_frame as usize % 4],
+                Color::Yellow,
+            ),
             SessionStatus::Idle => ("○", Color::Green),
             SessionStatus::WaitingForUser { .. } => ("◐", Color::Magenta),
             SessionStatus::Unknown => ("?", Color::DarkGray),
