@@ -17,6 +17,7 @@ A TUI tool to list and navigate Claude Code sessions running in WezTerm tabs/pan
   ◆ <a href="#features">Features</a>
   ◆ <a href="#installation">Installation</a>
   ◆ <a href="#architecture">Architecture</a>
+  ◆ <a href="docs/wezterm-tips.md">WezTerm Tips</a>
 </p>
 
 <img width="895" height="550" alt="SS 2026-02-01 23 31 11" src="https://github.com/user-attachments/assets/a62af73b-7be6-4709-a774-6eb9033a9f6b" />
