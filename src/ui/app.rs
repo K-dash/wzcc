@@ -23,7 +23,7 @@ use std::sync::mpsc::{channel, Receiver};
 use super::event::{
     is_down_key, is_enter_key, is_quit_key, is_refresh_key, is_up_key, Event, EventHandler,
 };
-use super::render::{render_details, render_list};
+use super::render::{render_details, render_footer, render_list};
 use super::session::ClaudeSession;
 
 /// TUI application
@@ -566,9 +566,14 @@ impl App {
     fn render(&mut self, f: &mut ratatui::Frame) {
         let size = f.area();
 
-        // TODO: Toast notification deferred for later
-        // Skipping due to rendering visibility issue after pane switch
-        let main_area = size;
+        // Vertical layout: main content + footer
+        let vertical_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(0), Constraint::Length(1)])
+            .split(size);
+
+        let main_area = vertical_chunks[0];
+        let footer_area = vertical_chunks[1];
 
         // 2-column layout (left: list 45%, right: details 55%)
         let chunks = Layout::default()
@@ -587,5 +592,8 @@ impl App {
 
         // Render details
         render_details(f, chunks[1], &self.sessions, self.list_state.selected());
+
+        // Render footer with keybindings help
+        render_footer(f, footer_area);
     }
 }

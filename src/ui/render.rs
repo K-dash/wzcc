@@ -301,3 +301,23 @@ pub fn render_details(
 
     f.render_widget(paragraph, area);
 }
+
+/// Render the footer with keybindings help.
+pub fn render_footer(f: &mut ratatui::Frame, area: Rect) {
+    let help_text = Line::from(vec![
+        Span::styled("[↑↓/jk]", Style::default().fg(Color::Cyan)),
+        Span::raw("Select "),
+        Span::styled("[Enter]", Style::default().fg(Color::Cyan)),
+        Span::raw("Focus "),
+        Span::styled("[1-9]", Style::default().fg(Color::Cyan)),
+        Span::raw("Quick "),
+        Span::styled("[r]", Style::default().fg(Color::Cyan)),
+        Span::raw("Refresh "),
+        Span::styled("[q]", Style::default().fg(Color::Cyan)),
+        Span::raw("Quit"),
+    ]);
+
+    let paragraph = Paragraph::new(help_text).style(Style::default().fg(Color::DarkGray));
+
+    f.render_widget(paragraph, area);
+}

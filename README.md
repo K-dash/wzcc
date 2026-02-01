@@ -52,7 +52,11 @@ wzcc simplifies management of multiple Claude Code sessions in WezTerm. Instead 
 - **Pane Details**: Displays pane ID, working directory, TTY, status, and git branch
 
 ### User Interface
+- **Real-time Updates**: Uses `notify` crate to watch transcript files for changes - status updates instantly without polling
 - **Efficient Rendering**: Event-driven, only redraws when state changes
+- **Quick Select**: Press `1-9` to instantly jump to a session (numbers shown in list)
+- **Relative Time Display**: Shows elapsed time since last activity (e.g., `5s`, `2m`, `1h`)
+- **Keybindings Help**: Footer shows available keybindings at a glance
 - **Keybindings**: vim-style (`j`/`k`) and arrow keys for navigation
 - **Double-click Support**: Click list items to jump
 - **Live Refresh**: `r` key refreshes session list
@@ -101,12 +105,12 @@ wzcc daemon
 Once the TUI launches:
 
 ```
-┌─ Claude Code Sessions (2) ────────────┬─ Details ────────────────┐
-│ 📂 projects/app (2 sessions)          │ Pane: 92                 │
-│   >> ◐ Pane 92: Docs [Waiting]        │                          │
-│      ● Pane 228: Coding [Idle]        │ CWD:                     │
+┌─ Claude Code Sessions (3) ────────────┬─ Details ────────────────┐
+│ 📂 projects/app (2 sessions)          │ Pane: 92 [1]             │
+│>> [1] ◐ Pane 92: Docs [Waiting] 5s    │                          │
+│   [2] ● Pane 228: Coding [Idle] 2m    │ CWD:                     │
 │ 📂 develop/feature                    │ ~/hobby/wzcc             │
-│      ○ Pane 235: Setup [Ready]        │                          │
+│   [3] ○ Pane 235: Setup [Ready] 1h    │                          │
 │                                       │ TTY: /dev/ttys042        │
 │                                       │                          │
 │                                       │ Status: Waiting          │
@@ -119,7 +123,7 @@ Once the TUI launches:
 │                                       │ Last output (preview):   │
 │                                       │ # Project README         │
 └───────────────────────────────────────┴──────────────────────────┘
-[↑/↓] Select  [Enter] Switch  [c/q] Quit  [r] Refresh  [g+g] Top
+[↑↓/jk]Select [Enter]Focus [1-9]Quick [r]Refresh [q]Quit
 ```
 
 **Keybindings:**
@@ -128,6 +132,7 @@ Once the TUI launches:
 |-----|--------|
 | `j` / `↓` | Move to next session |
 | `k` / `↑` | Move to previous session |
+| `1-9` | Quick select & focus session by number |
 | `g` + `g` | Jump to first session |
 | `G` | Jump to last session |
 | `Enter` / Double-click | Switch to selected session (TUI continues) |
