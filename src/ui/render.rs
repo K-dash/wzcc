@@ -76,9 +76,19 @@ pub fn render_list(
             pane.title.clone()
         };
 
+        // Quick select number (1-9, or space if > 9)
+        let quick_num = if session_idx < 9 {
+            format!("[{}]", session_idx + 1)
+        } else {
+            "   ".to_string()
+        };
+
         // Indent (all sessions are indented)
         let line = Line::from(vec![
-            Span::raw("  "),
+            Span::styled(
+                format!("{} ", quick_num),
+                Style::default().fg(Color::DarkGray),
+            ),
             Span::styled(
                 format!("{} ", status_icon),
                 Style::default()
@@ -140,9 +150,17 @@ pub fn render_details(
         if let Some(session) = sessions.get(i) {
             let pane = &session.pane;
 
+            // Quick select number display (1-9 or none)
+            let quick_num_display = if i < 9 {
+                format!(" [{}]", i + 1)
+            } else {
+                String::new()
+            };
+
             let mut lines = vec![Line::from(vec![
                 Span::styled("Pane: ", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(pane.pane_id.to_string()),
+                Span::styled(quick_num_display, Style::default().fg(Color::DarkGray)),
             ])];
 
             if let Some(cwd) = pane.cwd_path() {

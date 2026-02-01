@@ -465,6 +465,19 @@ impl App {
                         terminal.draw(|f| self.render(f))?;
                         self.refresh()?;
                         self.refreshing = false;
+                    } else if let KeyCode::Char(c) = key.code {
+                        // Quick select with number keys [1-9]
+                        if let Some(digit) = c.to_digit(10) {
+                            if (1..=9).contains(&digit) {
+                                let index = (digit - 1) as usize;
+                                if index < self.sessions.len() {
+                                    self.list_state.select(Some(index));
+                                    self.dirty = true;
+                                    // Also jump to the session
+                                    let _ = self.jump_to_selected();
+                                }
+                            }
+                        }
                     }
                 }
                 Event::Mouse(mouse) => {
