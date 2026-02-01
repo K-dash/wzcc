@@ -83,12 +83,14 @@ wzcc simplifies management of multiple Claude Code sessions in WezTerm. Instead 
 git clone https://github.com/K-dash/wzcc.git
 cd wzcc
 
-# Build release binary
-cargo build --release
-
-# Install to ~/.cargo/bin
+# Build and install to ~/.cargo/bin
 cargo install --path .
+
+# (Recommended) Install optional components for full functionality
+wzcc install
 ```
+
+> **Note**: `wzcc install` sets up workspace switching and statusLine bridge for accurate session detection. See [Limitations](#limitations) for details on what each component does.
 
 ### Running
 
@@ -120,25 +122,6 @@ wzcc daemon
 | `c` | Quit TUI |
 | `q` / `Esc` | Quit TUI |
 | `r` | Refresh session list |
-
-## Installation
-
-### From Source
-
-```bash
-# Clone repository
-git clone https://github.com/K-dash/wzcc.git
-cd wzcc
-
-# Build and install
-cargo install --path .
-```
-
-### Verify Installation
-
-```bash
-wzcc --version
-```
 
 ## Architecture
 
@@ -209,22 +192,6 @@ When using the statusLine bridge, wzcc tracks session information via TTY-keyed 
 **Why this matters:** Without stale detection, sessions sharing the same working directory could display incorrect status from another session's transcript. The stale check prevents this by showing `Unknown` instead of potentially wrong information.
 
 ## Limitations
-
-### Quick Setup (Recommended)
-
-For the best experience, install all optional components with a single command:
-
-```bash
-wzcc install
-```
-
-This installs both the workspace switcher and the statusLine bridge. To uninstall all components:
-
-```bash
-wzcc uninstall
-```
-
-See below for details on what each component does.
 
 ### Cross-Workspace Navigation
 
