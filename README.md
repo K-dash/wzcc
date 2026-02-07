@@ -119,6 +119,7 @@ wzcc daemon
 | `1-9` | Quick select & focus session by number |
 | `g` + `g` | Jump to first session |
 | `G` | Jump to last session |
+| `h` / `l` | Resize details panel (h: shrink, l: expand) |
 | `Enter` / Double-click | Switch to selected session (TUI continues) |
 | `c` | Quit TUI |
 | `q` / `Esc` | Quit TUI |

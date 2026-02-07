@@ -393,6 +393,8 @@ pub fn render_footer(f: &mut ratatui::Frame, area: Rect) {
         Span::raw("Focus "),
         Span::styled("[1-9]", Style::default().fg(Color::Cyan)),
         Span::raw("Quick "),
+        Span::styled("[h/l]", Style::default().fg(Color::Cyan)),
+        Span::raw("Resize "),
         Span::styled("[r]", Style::default().fg(Color::Cyan)),
         Span::raw("Refresh "),
         Span::styled("[q]", Style::default().fg(Color::Cyan)),
