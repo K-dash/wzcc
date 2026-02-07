@@ -257,12 +257,14 @@ impl App {
 
         // Cannot show last_output when multiple sessions share the same cwd
         // BUT only if they don't have statusLine bridge mapping (has_mapping = false)
-        // Count sessions per cwd (only those without mapping)
+        // Count sessions per cwd (only those without mapping AND without warning)
+        // Sessions with warning are stale bridge sessions - bridge is installed but not updating
         let mut cwd_counts: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
         for session in &self.sessions {
-            // Only count sessions without statusLine mapping
-            if session.session_id.is_none() {
+            // Only count sessions that have no mapping AND no warning (i.e., bridge not installed)
+            // Stale sessions (warning set) already have appropriate messaging
+            if session.session_id.is_none() && session.warning.is_none() {
                 if let Some(cwd) = session.pane.cwd_path() {
                     *cwd_counts.entry(cwd).or_insert(0) += 1;
                 }
@@ -273,6 +275,11 @@ impl App {
         for session in &mut self.sessions {
             // Skip sessions that have statusLine mapping - they are already accurate
             if session.session_id.is_some() {
+                continue;
+            }
+
+            // Skip sessions with warning (stale bridge) - they already show appropriate message
+            if session.warning.is_some() {
                 continue;
             }
 
