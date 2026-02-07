@@ -48,6 +48,7 @@ Before committing, verify:
 - Before committing, ALWAYS re-read this Workflow section
 - When user says "commit", first check current branch and create feature branch if on main
 - When user-facing behavior changes, proactively update README.md before committing
+- **All code comments, commit messages, PR titles, PR descriptions, and review comments MUST be written in English**
 
 ## Code Style
 
