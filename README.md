@@ -64,6 +64,7 @@ wzcc simplifies management of multiple Claude Code sessions in WezTerm. Instead 
 - **Relative Time Display**: Shows elapsed time since last activity (e.g., `5s`, `2m`, `1h`)
 - **Keybindings Help**: Footer shows available keybindings at a glance
 - **Keybindings**: vim-style (`j`/`k`) and arrow keys for navigation
+- **Prompt Input**: Send prompts directly to Claude Code sessions from the details panel (`i` key, supports multi-line via `Ctrl+O`)
 - **Double-click Support**: Click list items to jump
 - **Live Refresh**: `r` key refreshes session list
 
@@ -120,10 +121,20 @@ wzcc daemon
 | `g` + `g` | Jump to first session |
 | `G` | Jump to last session |
 | `h` / `l` | Resize details panel (h: shrink, l: expand) |
+| `i` | Open prompt input (send text to selected session) |
 | `Enter` / Double-click | Switch to selected session (TUI continues) |
 | `c` | Quit TUI |
 | `q` / `Esc` | Quit TUI |
 | `r` | Refresh session list |
+
+**Prompt Input Mode** (press `i` to enter):
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Send prompt to session and focus the pane |
+| `Ctrl+O` | Insert newline (multi-line input) |
+| `Esc` | Cancel and exit input mode |
+| `Ctrl+U` | Clear input buffer |
 
 ## Architecture
 
