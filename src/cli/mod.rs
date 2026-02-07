@@ -51,6 +51,58 @@ impl WeztermCli {
         Ok(())
     }
 
+    /// Send text to the specified pane via bracketed paste, then press Enter to submit
+    pub fn send_text(pane_id: u32, text: &str) -> Result<()> {
+        // Send text as bracketed paste
+        let output = Command::new("wezterm")
+            .args([
+                "cli",
+                "send-text",
+                "--pane-id",
+                &pane_id.to_string(),
+                "--",
+                text,
+            ])
+            .output()
+            .context("Failed to execute wezterm cli send-text")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!(
+                "wezterm cli send-text failed for pane {}: {}",
+                pane_id,
+                stderr
+            );
+        }
+
+        // Wait for the pane to process the bracketed paste before sending Enter
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        // Send Enter key (carriage return) via --no-paste to trigger submit
+        let output = Command::new("wezterm")
+            .args([
+                "cli",
+                "send-text",
+                "--pane-id",
+                &pane_id.to_string(),
+                "--no-paste",
+                "\r",
+            ])
+            .output()
+            .context("Failed to send enter key to pane")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!(
+                "wezterm cli send-text (enter) failed for pane {}: {}",
+                pane_id,
+                stderr
+            );
+        }
+
+        Ok(())
+    }
+
     /// Change tab title for the specified pane
     pub fn set_tab_title(pane_id: u32, title: &str) -> Result<()> {
         let output = Command::new("wezterm")

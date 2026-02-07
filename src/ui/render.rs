@@ -1,11 +1,12 @@
 use crate::transcript::SessionStatus;
 use ratatui::{
-    layout::Rect,
+    layout::{Constraint, Direction, Layout, Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
 use std::time::SystemTime;
+use unicode_width::UnicodeWidthChar;
 
 use super::session::{status_display, wrap_text_lines, ClaudeSession};
 
@@ -241,6 +242,9 @@ pub fn render_details(
     area: Rect,
     sessions: &[ClaudeSession],
     selected: Option<usize>,
+    input_mode: bool,
+    input_buffer: &str,
+    cursor_position: usize,
 ) {
     let text = if let Some(i) = selected {
         if let Some(session) = sessions.get(i) {
@@ -377,29 +381,192 @@ pub fn render_details(
         vec![Line::from("No sessions")]
     };
 
-    let paragraph = Paragraph::new(text)
-        .block(Block::default().borders(Borders::ALL).title(" Details "))
-        .wrap(Wrap { trim: false });
+    if input_mode {
+        // Inner width of the input box (inside borders)
+        let inner_width = area.width.saturating_sub(2) as usize;
+        let prefix_width: usize = 2; // "> " or "  "
+        let text_width = inner_width.saturating_sub(prefix_width);
 
-    f.render_widget(paragraph, area);
+        // Build visual lines with manual wrapping + track cursor position
+        let mut visual_lines: Vec<Line<'static>> = Vec::new();
+        let mut cursor_visual_row: u16 = 0;
+        let mut cursor_visual_col: u16 = prefix_width as u16;
+        let mut global_byte = 0usize;
+
+        let logical_lines: Vec<&str> = input_buffer.split('\n').collect();
+        for (li, logical_line) in logical_lines.iter().enumerate() {
+            let prefix_str = if li == 0 { "> " } else { "  " };
+
+            if logical_line.is_empty() {
+                // Cursor on empty line
+                if cursor_position == global_byte {
+                    cursor_visual_row = visual_lines.len() as u16;
+                    cursor_visual_col = prefix_width as u16;
+                }
+                visual_lines.push(Line::from(Span::styled(
+                    prefix_str.to_string(),
+                    Style::default().fg(Color::Cyan),
+                )));
+            } else if text_width == 0 {
+                // Degenerate: no space for text
+                visual_lines.push(Line::from(Span::styled(
+                    prefix_str.to_string(),
+                    Style::default().fg(Color::Cyan),
+                )));
+            } else {
+                let mut col_w = 0usize;
+                let mut chunk_start = 0usize; // byte offset within logical_line
+                let mut is_first_visual = true;
+
+                for (ci, ch) in logical_line.char_indices() {
+                    let ch_w = UnicodeWidthChar::width(ch).unwrap_or(0);
+
+                    // Wrap if adding this char would exceed available width
+                    if col_w + ch_w > text_width && col_w > 0 {
+                        let chunk = &logical_line[chunk_start..ci];
+                        let pfx = if is_first_visual { prefix_str } else { "  " };
+                        visual_lines.push(Line::from(vec![
+                            Span::styled(pfx.to_string(), Style::default().fg(Color::Cyan)),
+                            Span::raw(chunk.to_string()),
+                        ]));
+                        chunk_start = ci;
+                        col_w = 0;
+                        is_first_visual = false;
+                    }
+
+                    // Check if cursor is at this character
+                    let byte_in_buf = global_byte + ci;
+                    if byte_in_buf == cursor_position {
+                        cursor_visual_row = visual_lines.len() as u16;
+                        cursor_visual_col = (prefix_width + col_w) as u16;
+                    }
+
+                    col_w += ch_w;
+                }
+
+                // Emit last chunk
+                let chunk = &logical_line[chunk_start..];
+                let pfx = if is_first_visual { prefix_str } else { "  " };
+                visual_lines.push(Line::from(vec![
+                    Span::styled(pfx.to_string(), Style::default().fg(Color::Cyan)),
+                    Span::raw(chunk.to_string()),
+                ]));
+
+                // Cursor at end of this logical line
+                let end_byte = global_byte + logical_line.len();
+                if cursor_position == end_byte {
+                    cursor_visual_row = (visual_lines.len() - 1) as u16;
+                    cursor_visual_col = (prefix_width + col_w) as u16;
+                }
+            }
+
+            global_byte += logical_line.len() + 1; // +1 for '\n'
+        }
+
+        // Input field height: visual lines + 2 (borders), max 7
+        let input_height = (visual_lines.len() as u16 + 2).min(7);
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(0), Constraint::Length(input_height)])
+            .split(area);
+
+        // Render details in top area
+        let paragraph = Paragraph::new(text)
+            .block(Block::default().borders(Borders::ALL).title(" Details "))
+            .wrap(Wrap { trim: false });
+        f.render_widget(paragraph, chunks[0]);
+
+        // Render input field in bottom area
+        let pane_id = selected
+            .and_then(|i| sessions.get(i))
+            .map(|s| s.pane.pane_id)
+            .unwrap_or(0);
+
+        // Calculate scroll offset to keep cursor visible
+        let max_visible_lines = input_height.saturating_sub(2); // inside borders
+        let scroll_offset = if cursor_visual_row >= max_visible_lines {
+            cursor_visual_row - max_visible_lines + 1
+        } else {
+            0
+        };
+
+        let input_paragraph = Paragraph::new(visual_lines)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!(" Send prompt to Pane {} ", pane_id))
+                    .border_style(Style::default().fg(Color::Cyan)),
+            )
+            .scroll((scroll_offset, 0));
+        f.render_widget(input_paragraph, chunks[1]);
+
+        // Set cursor position (+1 for border, adjusted for scroll)
+        let cursor_x = chunks[1].x + 1 + cursor_visual_col;
+        let cursor_y = chunks[1].y + 1 + cursor_visual_row - scroll_offset;
+        f.set_cursor_position(Position::new(cursor_x, cursor_y));
+    } else {
+        let paragraph = Paragraph::new(text)
+            .block(Block::default().borders(Borders::ALL).title(" Details "))
+            .wrap(Wrap { trim: false });
+
+        f.render_widget(paragraph, area);
+    }
 }
 
 /// Render the footer with keybindings help.
-pub fn render_footer(f: &mut ratatui::Frame, area: Rect) {
-    let help_text = Line::from(vec![
-        Span::styled("[↑↓/jk]", Style::default().fg(Color::Cyan)),
-        Span::raw("Select "),
-        Span::styled("[Enter]", Style::default().fg(Color::Cyan)),
-        Span::raw("Focus "),
-        Span::styled("[1-9]", Style::default().fg(Color::Cyan)),
-        Span::raw("Quick "),
-        Span::styled("[h/l]", Style::default().fg(Color::Cyan)),
-        Span::raw("Resize "),
-        Span::styled("[r]", Style::default().fg(Color::Cyan)),
-        Span::raw("Refresh "),
-        Span::styled("[q]", Style::default().fg(Color::Cyan)),
-        Span::raw("Quit"),
-    ]);
+pub fn render_footer(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    input_mode: bool,
+    toast: Option<&super::toast::Toast>,
+) {
+    // Show toast if active (overrides footer)
+    if let Some(toast) = toast {
+        let (color, prefix) = match toast.toast_type {
+            super::toast::ToastType::Success => (Color::Green, "✓"),
+            super::toast::ToastType::Error => (Color::Red, "✗"),
+        };
+        let toast_text = Line::from(vec![
+            Span::styled(format!("{} ", prefix), Style::default().fg(color)),
+            Span::styled(&toast.message, Style::default().fg(color)),
+        ]);
+        let paragraph = Paragraph::new(toast_text);
+        f.render_widget(paragraph, area);
+        return;
+    }
+
+    let help_text = if input_mode {
+        Line::from(vec![
+            Span::styled("[Enter]", Style::default().fg(Color::Cyan)),
+            Span::raw("Send "),
+            Span::styled("[^O]", Style::default().fg(Color::Cyan)),
+            Span::raw("Newline "),
+            Span::styled("[^hjkl]", Style::default().fg(Color::Cyan)),
+            Span::raw("Move "),
+            Span::styled("[Esc]", Style::default().fg(Color::Cyan)),
+            Span::raw("Cancel "),
+            Span::styled("[^U]", Style::default().fg(Color::Cyan)),
+            Span::raw("Clear"),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("[↑↓/jk]", Style::default().fg(Color::Cyan)),
+            Span::raw("Select "),
+            Span::styled("[Enter]", Style::default().fg(Color::Cyan)),
+            Span::raw("Focus "),
+            Span::styled("[i]", Style::default().fg(Color::Cyan)),
+            Span::raw("Prompt "),
+            Span::styled("[1-9]", Style::default().fg(Color::Cyan)),
+            Span::raw("Quick "),
+            Span::styled("[h/l]", Style::default().fg(Color::Cyan)),
+            Span::raw("Resize "),
+            Span::styled("[r]", Style::default().fg(Color::Cyan)),
+            Span::raw("Refresh "),
+            Span::styled("[q]", Style::default().fg(Color::Cyan)),
+            Span::raw("Quit"),
+        ])
+    };
 
     let paragraph = Paragraph::new(help_text).style(Style::default().fg(Color::DarkGray));
 

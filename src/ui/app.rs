@@ -6,7 +6,9 @@ use crate::detector::ClaudeCodeDetector;
 use crate::session_mapping::SessionMapping;
 use anyhow::Result;
 use crossterm::{
-    event::{DisableMouseCapture, EnableMouseCapture, KeyCode, MouseButton, MouseEventKind},
+    event::{
+        DisableMouseCapture, EnableMouseCapture, KeyCode, KeyModifiers, MouseButton, MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -26,6 +28,7 @@ use super::event::{
 };
 use super::render::{render_details, render_footer, render_list};
 use super::session::ClaudeSession;
+use super::toast::Toast;
 
 /// TUI application
 pub struct App {
@@ -63,6 +66,14 @@ pub struct App {
     current_workspace: String,
     /// Details panel width percentage (default: 45, range: 20-80)
     details_width_percent: u16,
+    /// Input mode (for sending prompts to sessions)
+    input_mode: bool,
+    /// Input buffer (supports newlines via Shift+Enter)
+    input_buffer: String,
+    /// Cursor position in input buffer (byte offset)
+    cursor_position: usize,
+    /// Toast notification
+    toast: Option<Toast>,
 }
 
 impl Default for App {
@@ -95,6 +106,10 @@ impl App {
             animation_frame: 0,
             current_workspace: String::new(),
             details_width_percent: 45,
+            input_mode: false,
+            input_buffer: String::new(),
+            cursor_position: 0,
+            toast: None,
         }
     }
 
@@ -439,6 +454,171 @@ impl App {
         None
     }
 
+    /// Enter input mode
+    fn enter_input_mode(&mut self) {
+        if self.list_state.selected().is_some() && !self.sessions.is_empty() {
+            self.input_mode = true;
+            self.input_buffer.clear();
+            self.cursor_position = 0;
+            self.dirty = true;
+            self.needs_full_redraw = true;
+        }
+    }
+
+    /// Exit input mode
+    fn exit_input_mode(&mut self) {
+        self.input_mode = false;
+        self.input_buffer.clear();
+        self.cursor_position = 0;
+        self.dirty = true;
+        self.needs_full_redraw = true;
+    }
+
+    /// Insert character at cursor position
+    fn input_insert_char(&mut self, c: char) {
+        self.input_buffer.insert(self.cursor_position, c);
+        self.cursor_position += c.len_utf8();
+        self.dirty = true;
+    }
+
+    /// Delete character before cursor
+    fn input_backspace(&mut self) {
+        if self.cursor_position > 0 {
+            // Find the previous character boundary
+            let prev = self.input_buffer[..self.cursor_position]
+                .char_indices()
+                .next_back()
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+            self.input_buffer.drain(prev..self.cursor_position);
+            self.cursor_position = prev;
+            self.dirty = true;
+        }
+    }
+
+    /// Move cursor left
+    fn input_cursor_left(&mut self) {
+        if self.cursor_position > 0 {
+            let prev = self.input_buffer[..self.cursor_position]
+                .char_indices()
+                .next_back()
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+            self.cursor_position = prev;
+            self.dirty = true;
+        }
+    }
+
+    /// Move cursor right
+    fn input_cursor_right(&mut self) {
+        if self.cursor_position < self.input_buffer.len() {
+            let next = self.input_buffer[self.cursor_position..]
+                .char_indices()
+                .nth(1)
+                .map(|(i, _)| self.cursor_position + i)
+                .unwrap_or(self.input_buffer.len());
+            self.cursor_position = next;
+            self.dirty = true;
+        }
+    }
+
+    /// Move cursor to the start of current line
+    fn input_cursor_home(&mut self) {
+        let before = &self.input_buffer[..self.cursor_position];
+        self.cursor_position = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
+        self.dirty = true;
+    }
+
+    /// Move cursor to the end of current line
+    fn input_cursor_end(&mut self) {
+        let after = &self.input_buffer[self.cursor_position..];
+        self.cursor_position += after.find('\n').unwrap_or(after.len());
+        self.dirty = true;
+    }
+
+    /// Move cursor up one line
+    fn input_cursor_up(&mut self) {
+        let before = &self.input_buffer[..self.cursor_position];
+        if let Some(current_line_start) = before.rfind('\n') {
+            // Find column offset in current line
+            let col = self.cursor_position - current_line_start - 1;
+            // Find start of previous line
+            let prev_line_start = before[..current_line_start]
+                .rfind('\n')
+                .map(|i| i + 1)
+                .unwrap_or(0);
+            let prev_line_len = current_line_start - prev_line_start;
+            self.cursor_position = prev_line_start + col.min(prev_line_len);
+            self.dirty = true;
+        }
+    }
+
+    /// Move cursor down one line
+    fn input_cursor_down(&mut self) {
+        let after = &self.input_buffer[self.cursor_position..];
+        if let Some(next_newline) = after.find('\n') {
+            // Find column offset in current line
+            let before = &self.input_buffer[..self.cursor_position];
+            let current_line_start = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
+            let col = self.cursor_position - current_line_start;
+            // Move to next line
+            let next_line_start = self.cursor_position + next_newline + 1;
+            let next_line_end = self.input_buffer[next_line_start..]
+                .find('\n')
+                .map(|i| next_line_start + i)
+                .unwrap_or(self.input_buffer.len());
+            let next_line_len = next_line_end - next_line_start;
+            self.cursor_position = next_line_start + col.min(next_line_len);
+            self.dirty = true;
+        }
+    }
+
+    /// Clear input buffer
+    fn input_clear(&mut self) {
+        self.input_buffer.clear();
+        self.cursor_position = 0;
+        self.dirty = true;
+    }
+
+    /// Send prompt to the selected session
+    fn send_prompt(&mut self) -> Result<()> {
+        let text = self.input_buffer.trim().to_string();
+        if text.is_empty() {
+            self.toast = Some(Toast::error("Empty prompt".to_string()));
+            self.dirty = true;
+            return Ok(());
+        }
+
+        if let Some(i) = self.list_state.selected() {
+            if let Some(session) = self.sessions.get(i) {
+                let pane_id = session.pane.pane_id;
+                let target_workspace = session.pane.workspace.clone();
+                let switching_workspace = target_workspace != self.current_workspace;
+
+                // Send text to pane
+                match WeztermCli::send_text(pane_id, &text) {
+                    Ok(()) => {
+                        // Switch workspace if needed
+                        if switching_workspace {
+                            let _ = switch_workspace(&target_workspace);
+                        }
+
+                        // Activate pane
+                        let _ = WeztermCli::activate_pane(pane_id);
+
+                        self.toast = Some(Toast::success(format!("Sent to Pane {}", pane_id)));
+                    }
+                    Err(e) => {
+                        self.toast = Some(Toast::error(format!("Failed: {}", e)));
+                    }
+                }
+            }
+        }
+
+        self.exit_input_mode();
+        Ok(())
+    }
+
     /// Run TUI
     pub fn run(&mut self) -> Result<()> {
         // Clean up stale session mappings for TTYs that no longer exist
@@ -500,9 +680,80 @@ impl App {
                 self.dirty = false;
             }
 
+            // Clear expired toast
+            if let Some(ref toast) = self.toast {
+                if toast.is_expired() {
+                    self.toast = None;
+                    self.dirty = true;
+                }
+            }
+
             // Event processing
             match event_handler.next()? {
+                Event::Key(key) if self.input_mode => {
+                    // Input mode key handling
+                    match key.code {
+                        KeyCode::Esc => {
+                            self.exit_input_mode();
+                        }
+                        KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            // Ctrl+O -> newline
+                            self.input_insert_char('\n');
+                        }
+                        KeyCode::Enter => {
+                            // Enter -> submit
+                            self.send_prompt()?;
+                        }
+                        KeyCode::Backspace => {
+                            self.input_backspace();
+                        }
+                        KeyCode::Left => {
+                            self.input_cursor_left();
+                        }
+                        KeyCode::Right => {
+                            self.input_cursor_right();
+                        }
+                        KeyCode::Up => {
+                            self.input_cursor_up();
+                        }
+                        KeyCode::Down => {
+                            self.input_cursor_down();
+                        }
+                        KeyCode::Home => {
+                            self.input_cursor_home();
+                        }
+                        KeyCode::End => {
+                            self.input_cursor_end();
+                        }
+                        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            self.input_cursor_home();
+                        }
+                        KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            self.input_cursor_end();
+                        }
+                        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            self.input_clear();
+                        }
+                        KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            self.input_cursor_left();
+                        }
+                        KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            self.input_cursor_down();
+                        }
+                        KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            self.input_cursor_up();
+                        }
+                        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            self.input_cursor_right();
+                        }
+                        KeyCode::Char(c) => {
+                            self.input_insert_char(c);
+                        }
+                        _ => {}
+                    }
+                }
                 Event::Key(key) => {
+                    // Normal mode key handling
                     // Handle gg sequence
                     if self.pending_g {
                         self.pending_g = false;
@@ -543,6 +794,9 @@ impl App {
                             self.dirty = true;
                             self.needs_full_redraw = true;
                         }
+                    } else if key.code == KeyCode::Char('i') {
+                        // Enter input mode
+                        self.enter_input_mode();
                     } else if is_refresh_key(&key) {
                         // Show refreshing indicator then update
                         self.refreshing = true;
@@ -564,6 +818,10 @@ impl App {
                             }
                         }
                     }
+                }
+                Event::Mouse(mouse) if self.input_mode => {
+                    // Ignore mouse in input mode
+                    let _ = mouse;
                 }
                 Event::Mouse(mouse) => {
                     // Handle left click only
@@ -693,9 +951,17 @@ impl App {
         );
 
         // Render details
-        render_details(f, chunks[1], &self.sessions, self.list_state.selected());
+        render_details(
+            f,
+            chunks[1],
+            &self.sessions,
+            self.list_state.selected(),
+            self.input_mode,
+            &self.input_buffer,
+            self.cursor_position,
+        );
 
         // Render footer with keybindings help
-        render_footer(f, footer_area);
+        render_footer(f, footer_area, self.input_mode, self.toast.as_ref());
     }
 }
