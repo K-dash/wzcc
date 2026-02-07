@@ -61,6 +61,8 @@ pub struct App {
     animation_frame: u8,
     /// Current workspace name (for detecting cross-workspace jumps)
     current_workspace: String,
+    /// Details panel width percentage (default: 45, range: 20-80)
+    details_width_percent: u16,
 }
 
 impl Default for App {
@@ -92,6 +94,7 @@ impl App {
             watched_dirs: Vec::new(),
             animation_frame: 0,
             current_workspace: String::new(),
+            details_width_percent: 45,
         }
     }
 
@@ -526,6 +529,20 @@ impl App {
                     } else if is_enter_key(&key) {
                         // Try to jump (TUI continues)
                         let _ = self.jump_to_selected();
+                    } else if key.code == KeyCode::Char('h') {
+                        // Expand details panel (move divider left)
+                        if self.details_width_percent < 80 {
+                            self.details_width_percent += 5;
+                            self.dirty = true;
+                            self.needs_full_redraw = true;
+                        }
+                    } else if key.code == KeyCode::Char('l') {
+                        // Shrink details panel (move divider right)
+                        if self.details_width_percent > 20 {
+                            self.details_width_percent -= 5;
+                            self.dirty = true;
+                            self.needs_full_redraw = true;
+                        }
                     } else if is_refresh_key(&key) {
                         // Show refreshing indicator then update
                         self.refreshing = true;
@@ -654,10 +671,14 @@ impl App {
         let main_area = vertical_chunks[0];
         let footer_area = vertical_chunks[1];
 
-        // 2-column layout (left: list 55%, right: details 45%)
+        // 2-column layout (left: list, right: details - resizable with h/l)
+        let list_percent = 100 - self.details_width_percent;
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+            .constraints([
+                Constraint::Percentage(list_percent),
+                Constraint::Percentage(self.details_width_percent),
+            ])
             .split(main_area);
 
         // Render list (update list_area)
