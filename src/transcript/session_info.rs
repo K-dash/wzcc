@@ -61,15 +61,16 @@ pub fn detect_session_info(pane: &Pane) -> SessionInfo {
                     warning: None,
                 };
             }
-            MappingResult::Stale => {
+            MappingResult::Stale(mapping) => {
                 // Mapping exists but is stale - don't fallback to CWD
                 // This prevents showing wrong status from another session with same CWD
+                // Preserve transcript_path and session_id so history browsing still works
                 return SessionInfo {
                     status: SessionStatus::Unknown,
                     last_prompt: None,
                     last_output: None,
-                    session_id: None,
-                    transcript_path: None,
+                    session_id: Some(mapping.session_id),
+                    transcript_path: Some(mapping.transcript_path),
                     updated_at: None,
                     warning: Some(
                         "Session info stale (statusLine not updating). Try interacting with the session.".to_string(),
