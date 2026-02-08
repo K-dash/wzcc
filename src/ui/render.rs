@@ -265,7 +265,7 @@ pub fn render_details(
     history_view: HistoryViewMode,
     history_turns: &[ConversationTurn],
     history_index: usize,
-    history_scroll_offset: &mut u16,
+    history_scroll_offset: &mut usize,
     history_list_state: &mut ListState,
     history_timestamps: &[Option<SystemTime>],
 ) {
@@ -641,7 +641,7 @@ fn render_history_details(
     area: Rect,
     turns: &[ConversationTurn],
     index: usize,
-    scroll_offset: &mut u16,
+    scroll_offset: &mut usize,
 ) {
     let turn = &turns[index];
     let total = turns.len();
@@ -696,11 +696,11 @@ fn render_history_details(
 
     // Clamp scroll offset to prevent overscroll beyond content
     // Write back to caller so the App state stays in bounds
-    let content_height = lines.len() as u16;
-    let viewport_height = area.height.saturating_sub(2); // minus borders
+    let content_height = lines.len();
+    let viewport_height = area.height.saturating_sub(2) as usize; // minus borders
     let max_scroll = content_height.saturating_sub(viewport_height);
     *scroll_offset = (*scroll_offset).min(max_scroll);
-    let clamped_offset = *scroll_offset;
+    let clamped_offset = (*scroll_offset).min(u16::MAX as usize) as u16;
 
     let title = format!(" History ({}/{}) ", turn_num, total);
     let paragraph = Paragraph::new(lines)
