@@ -23,13 +23,13 @@ use ratatui::{
 };
 use std::collections::HashMap;
 use std::io;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use super::event::{
     is_down_key, is_enter_key, is_quit_key, is_refresh_key, is_up_key, Event, EventHandler,
 };
 use super::input_buffer::InputBuffer;
-use super::render::{render_details, render_footer, render_list};
+use super::render::{render_details, render_footer, render_list, HistoryViewMode};
 use super::session::ClaudeSession;
 use super::toast::Toast;
 
@@ -75,14 +75,18 @@ pub struct App {
     kill_confirm: Option<(u32, String)>,
     /// Add pane mode: stores (pane_id, cwd) for split direction selection
     add_pane_pending: Option<(u32, String)>,
-    /// History browsing mode
-    history_mode: bool,
+    /// History browsing view mode (Off / List / Detail)
+    history_view: HistoryViewMode,
     /// Conversation turns for history browsing (newest first)
     history_turns: Vec<ConversationTurn>,
-    /// Current history index (0 = newest)
+    /// Selection state for history list view
+    history_list_state: ListState,
+    /// Current history index for detail view (0 = newest)
     history_index: usize,
-    /// Scroll offset within the current history turn (line-level)
+    /// Scroll offset within the current history turn detail (line-level)
     history_scroll_offset: u16,
+    /// Pre-parsed timestamps for history turns (avoids per-frame parsing)
+    history_timestamps: Vec<Option<SystemTime>>,
     /// User configuration loaded from ~/.config/wzcc/config.toml
     config: Config,
     /// Git branch cache (30s TTL)
@@ -133,10 +137,12 @@ impl App {
             toast,
             kill_confirm: None,
             add_pane_pending: None,
-            history_mode: false,
+            history_view: HistoryViewMode::Off,
             history_turns: Vec::new(),
+            history_list_state: ListState::default(),
             history_index: 0,
             history_scroll_offset: 0,
+            history_timestamps: Vec::new(),
             config,
             git_branch_cache: GitBranchCache::new(30),
             last_transcript_refresh: Instant::now(),
@@ -560,16 +566,30 @@ impl App {
         self.dirty = true;
     }
 
-    /// Enter history browsing mode for the selected session
+    /// Enter history list view for the selected session
     fn enter_history_mode(&mut self) {
         if let Some(i) = self.list_state.selected() {
             if let Some(session) = self.sessions.get(i) {
                 if let Some(path) = &session.transcript_path {
                     match crate::transcript::extract_conversation_turns(path, 50) {
                         Ok(turns) if !turns.is_empty() => {
+                            // Pre-parse timestamps once to avoid per-frame parsing
+                            self.history_timestamps = turns
+                                .iter()
+                                .map(|t| {
+                                    t.timestamp.as_ref().and_then(|ts| {
+                                        chrono::DateTime::parse_from_rfc3339(ts)
+                                            .ok()
+                                            .map(|dt| dt.into())
+                                    })
+                                })
+                                .collect();
                             self.history_turns = turns;
+                            self.history_list_state.select(Some(0));
                             self.history_index = 0;
-                            self.history_mode = true;
+                            self.history_scroll_offset = 0;
+                            self.history_view = HistoryViewMode::List;
+                            self.pending_g = false;
                             self.dirty = true;
                             self.needs_full_redraw = true;
                         }
@@ -590,33 +610,41 @@ impl App {
         }
     }
 
-    /// Exit history browsing mode
+    /// Exit history mode entirely (back to normal)
     fn exit_history_mode(&mut self) {
-        self.history_mode = false;
+        self.history_view = HistoryViewMode::Off;
         self.history_turns.clear();
+        self.history_list_state.select(None);
         self.history_index = 0;
         self.history_scroll_offset = 0;
+        self.history_timestamps.clear();
         self.pending_g = false;
         self.dirty = true;
         self.needs_full_redraw = true;
     }
 
-    /// Navigate to older turn in history (j/down)
-    fn history_older(&mut self) {
-        if self.history_index + 1 < self.history_turns.len() {
-            self.history_index += 1;
-            self.history_scroll_offset = 0;
-            self.dirty = true;
+    /// Enter history detail view from list
+    fn enter_history_detail(&mut self) {
+        if let Some(i) = self.history_list_state.selected() {
+            if i < self.history_turns.len() {
+                self.history_index = i;
+                self.history_scroll_offset = 0;
+                self.history_view = HistoryViewMode::Detail;
+                self.pending_g = false;
+                self.dirty = true;
+                self.needs_full_redraw = true;
+            }
         }
     }
 
-    /// Navigate to newer turn in history (k/up)
-    fn history_newer(&mut self) {
-        if self.history_index > 0 {
-            self.history_index -= 1;
-            self.history_scroll_offset = 0;
-            self.dirty = true;
-        }
+    /// Return from detail view to list view
+    fn exit_history_detail(&mut self) {
+        self.history_view = HistoryViewMode::List;
+        self.history_list_state.select(Some(self.history_index));
+        self.history_scroll_offset = 0;
+        self.pending_g = false;
+        self.dirty = true;
+        self.needs_full_redraw = true;
     }
 
     /// Run TUI
@@ -782,29 +810,93 @@ impl App {
                         }
                     }
                 }
-                Event::Key(key) if self.history_mode => {
-                    // History browsing mode key handling
+                Event::Key(key) if self.history_view == HistoryViewMode::List => {
+                    // History list view key handling
                     match key.code {
                         KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('H') => {
                             self.exit_history_mode();
                         }
+                        KeyCode::Enter => {
+                            self.pending_g = false;
+                            self.enter_history_detail();
+                        }
                         KeyCode::Char('j') | KeyCode::Down => {
                             self.pending_g = false;
-                            self.history_older();
+                            let len = self.history_turns.len();
+                            if let Some(i) = self.history_list_state.selected() {
+                                if i + 1 < len {
+                                    self.history_list_state.select(Some(i + 1));
+                                    self.dirty = true;
+                                }
+                            }
                         }
                         KeyCode::Char('k') | KeyCode::Up => {
                             self.pending_g = false;
-                            self.history_newer();
+                            if let Some(i) = self.history_list_state.selected() {
+                                if i > 0 {
+                                    self.history_list_state.select(Some(i - 1));
+                                    self.dirty = true;
+                                }
+                            }
+                        }
+                        KeyCode::Char('g') => {
+                            if self.pending_g {
+                                // gg -> jump to newest (first in list)
+                                self.history_list_state.select(Some(0));
+                                self.dirty = true;
+                                self.pending_g = false;
+                            } else {
+                                self.pending_g = true;
+                            }
+                        }
+                        KeyCode::Char('G') => {
+                            // G -> jump to oldest (last in list)
+                            self.pending_g = false;
+                            if !self.history_turns.is_empty() {
+                                self.history_list_state
+                                    .select(Some(self.history_turns.len() - 1));
+                                self.dirty = true;
+                            }
+                        }
+                        _ => {
+                            self.pending_g = false;
+                        }
+                    }
+                }
+                Event::Key(key) if self.history_view == HistoryViewMode::Detail => {
+                    // History detail view key handling
+                    match key.code {
+                        KeyCode::Esc | KeyCode::Char('q') => {
+                            // Back to list (NOT exit history entirely)
+                            self.exit_history_detail();
+                        }
+                        KeyCode::Char('H') => {
+                            // H in detail -> back to list
+                            self.exit_history_detail();
+                        }
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            // Scroll content down line-by-line
+                            self.pending_g = false;
+                            self.history_scroll_offset =
+                                self.history_scroll_offset.saturating_add(1);
+                            self.dirty = true;
+                        }
+                        KeyCode::Char('k') | KeyCode::Up => {
+                            // Scroll content up line-by-line
+                            self.pending_g = false;
+                            self.history_scroll_offset =
+                                self.history_scroll_offset.saturating_sub(1);
+                            self.dirty = true;
                         }
                         KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            // Ctrl+D -> scroll down half page within turn
+                            // Ctrl+D -> scroll down half page
                             self.pending_g = false;
                             self.history_scroll_offset =
                                 self.history_scroll_offset.saturating_add(10);
                             self.dirty = true;
                         }
                         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            // Ctrl+U -> scroll up half page within turn
+                            // Ctrl+U -> scroll up half page
                             self.pending_g = false;
                             self.history_scroll_offset =
                                 self.history_scroll_offset.saturating_sub(10);
@@ -812,8 +904,7 @@ impl App {
                         }
                         KeyCode::Char('g') => {
                             if self.pending_g {
-                                // gg -> jump to newest
-                                self.history_index = 0;
+                                // gg -> scroll to top
                                 self.history_scroll_offset = 0;
                                 self.dirty = true;
                                 self.pending_g = false;
@@ -822,13 +913,10 @@ impl App {
                             }
                         }
                         KeyCode::Char('G') => {
-                            // G -> jump to oldest
+                            // G -> scroll to bottom (clamped in render)
                             self.pending_g = false;
-                            if !self.history_turns.is_empty() {
-                                self.history_index = self.history_turns.len() - 1;
-                                self.history_scroll_offset = 0;
-                                self.dirty = true;
-                            }
+                            self.history_scroll_offset = u16::MAX;
+                            self.dirty = true;
                         }
                         _ => {
                             self.pending_g = false;
@@ -912,8 +1000,10 @@ impl App {
                         }
                     }
                 }
-                Event::Mouse(mouse) if self.input_mode => {
-                    // Ignore mouse in input mode
+                Event::Mouse(mouse)
+                    if self.input_mode || self.history_view != HistoryViewMode::Off =>
+                {
+                    // Ignore mouse in input mode and history mode
                     let _ = mouse;
                 }
                 Event::Mouse(mouse) => {
@@ -1071,10 +1161,12 @@ impl App {
             self.input_mode,
             self.input_buffer.as_str(),
             self.input_buffer.cursor(),
-            self.history_mode,
+            self.history_view,
             &self.history_turns,
             self.history_index,
             &mut self.history_scroll_offset,
+            &mut self.history_list_state,
+            &self.history_timestamps,
         );
 
         // Render footer with keybindings help
@@ -1082,7 +1174,7 @@ impl App {
             f,
             footer_area,
             self.input_mode,
-            self.history_mode,
+            self.history_view,
             self.toast.as_ref(),
             self.kill_confirm.as_ref(),
             self.add_pane_pending.as_ref(),

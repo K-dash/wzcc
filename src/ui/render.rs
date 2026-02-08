@@ -12,6 +12,17 @@ use crate::transcript::ConversationTurn;
 
 use super::session::{status_display, wrap_text_lines, ClaudeSession};
 
+/// Sub-mode for history browsing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HistoryViewMode {
+    /// History mode is not active.
+    Off,
+    /// Showing the history turn list.
+    List,
+    /// Showing a single turn's detail.
+    Detail,
+}
+
 /// Format a duration as a relative time string (e.g., "5s", "2m", "1h", "3d").
 fn format_duration(duration: std::time::Duration) -> String {
     let secs = duration.as_secs();
@@ -251,15 +262,30 @@ pub fn render_details(
     input_mode: bool,
     input_buffer: &str,
     cursor_position: usize,
-    history_mode: bool,
+    history_view: HistoryViewMode,
     history_turns: &[ConversationTurn],
     history_index: usize,
     history_scroll_offset: &mut u16,
+    history_list_state: &mut ListState,
+    history_timestamps: &[Option<SystemTime>],
 ) {
-    // History browsing mode: render history view instead of normal details
-    if history_mode && !history_turns.is_empty() {
-        render_history_details(f, area, history_turns, history_index, history_scroll_offset);
-        return;
+    // History browsing mode dispatch
+    match history_view {
+        HistoryViewMode::List if !history_turns.is_empty() => {
+            render_history_list(
+                f,
+                area,
+                history_turns,
+                history_list_state,
+                history_timestamps,
+            );
+            return;
+        }
+        HistoryViewMode::Detail if !history_turns.is_empty() => {
+            render_history_details(f, area, history_turns, history_index, history_scroll_offset);
+            return;
+        }
+        _ => {}
     }
 
     let text = if let Some(i) = selected {
@@ -530,6 +556,85 @@ pub fn render_details(
     }
 }
 
+/// Render the history turn list in the details panel area.
+fn render_history_list(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    turns: &[ConversationTurn],
+    list_state: &mut ListState,
+    timestamps: &[Option<SystemTime>],
+) {
+    let inner_width = area.width.saturating_sub(4) as usize; // borders + highlight symbol
+
+    let items: Vec<ListItem> = turns
+        .iter()
+        .enumerate()
+        .map(|(i, turn)| {
+            let turn_num = turns.len() - i; // chronological: oldest=#1, newest=#N
+
+            // Format relative time from pre-parsed timestamp
+            let time_display = timestamps
+                .get(i)
+                .and_then(|ts| ts.as_ref())
+                .map(format_relative_time)
+                .unwrap_or_else(|| "---".to_string());
+
+            let time_color = timestamps
+                .get(i)
+                .and_then(|ts| ts.as_ref())
+                .map(elapsed_time_color)
+                .unwrap_or(Color::DarkGray);
+
+            // First line of user prompt, truncated to fit
+            let first_line = turn.user_prompt.lines().next().unwrap_or("");
+
+            // Calculate space: "#NN " + "XXs " + prompt
+            let num_str = format!("#{}", turn_num);
+            let prefix_len = num_str.len() + 1 + time_display.len() + 1;
+            let prompt_max = inner_width.saturating_sub(prefix_len);
+            let truncated_prompt: String = if first_line.chars().count() > prompt_max {
+                let s: String = first_line
+                    .chars()
+                    .take(prompt_max.saturating_sub(3))
+                    .collect();
+                format!("{}...", s)
+            } else {
+                first_line.to_string()
+            };
+
+            let line = Line::from(vec![
+                Span::styled(
+                    format!("{} ", num_str),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(
+                    format!("{} ", time_display),
+                    Style::default().fg(time_color),
+                ),
+                Span::raw(truncated_prompt),
+            ]);
+            ListItem::new(line)
+        })
+        .collect();
+
+    let title = format!(" History ({} turns) ", turns.len());
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .border_style(Style::default().fg(Color::Yellow)),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol(">> ");
+
+    f.render_stateful_widget(list, area, list_state);
+}
+
 /// Render details panel in history browsing mode.
 fn render_history_details(
     f: &mut ratatui::Frame,
@@ -616,7 +721,7 @@ pub fn render_footer(
     f: &mut ratatui::Frame,
     area: Rect,
     input_mode: bool,
-    history_mode: bool,
+    history_view: HistoryViewMode,
     toast: Option<&super::toast::Toast>,
     kill_confirm: Option<&(u32, String)>,
     add_pane_pending: Option<&(u32, String)>,
@@ -693,16 +798,29 @@ pub fn render_footer(
         return;
     }
 
-    let help_text = if history_mode {
+    let help_text = if history_view == HistoryViewMode::List {
         Line::from(vec![
             Span::styled("[jk]", Style::default().fg(Color::Yellow)),
-            Span::raw("Turn "),
-            Span::styled("[^D/^U]", Style::default().fg(Color::Yellow)),
-            Span::raw("Scroll "),
+            Span::raw("Select "),
+            Span::styled("[Enter]", Style::default().fg(Color::Yellow)),
+            Span::raw("Open "),
             Span::styled("[gg]", Style::default().fg(Color::Yellow)),
             Span::raw("Newest "),
             Span::styled("[G]", Style::default().fg(Color::Yellow)),
             Span::raw("Oldest "),
+            Span::styled("[Esc/q]", Style::default().fg(Color::Yellow)),
+            Span::raw("Back"),
+        ])
+    } else if history_view == HistoryViewMode::Detail {
+        Line::from(vec![
+            Span::styled("[jk]", Style::default().fg(Color::Yellow)),
+            Span::raw("Scroll "),
+            Span::styled("[^D/^U]", Style::default().fg(Color::Yellow)),
+            Span::raw("HalfPage "),
+            Span::styled("[gg]", Style::default().fg(Color::Yellow)),
+            Span::raw("Top "),
+            Span::styled("[G]", Style::default().fg(Color::Yellow)),
+            Span::raw("Bottom "),
             Span::styled("[Esc/q]", Style::default().fg(Color::Yellow)),
             Span::raw("Back"),
         ])

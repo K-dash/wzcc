@@ -318,6 +318,7 @@ pub struct UserTranscriptEntry {
     pub type_: String,
     #[serde(rename = "isMeta")]
     pub is_meta: Option<bool>,
+    pub timestamp: Option<String>,
     pub message: Option<UserMessage>,
 }
 
@@ -437,6 +438,7 @@ pub fn get_last_assistant_text(path: &Path, max_chars: usize) -> Result<Option<S
 pub struct ConversationTurn {
     pub user_prompt: String,
     pub assistant_response: String,
+    pub timestamp: Option<String>,
 }
 
 /// Extract conversation turns from a transcript file.
@@ -448,6 +450,7 @@ pub fn extract_conversation_turns(path: &Path, max_turns: usize) -> Result<Vec<C
 
     let mut turns: Vec<ConversationTurn> = Vec::new();
     let mut current_prompt: Option<String> = None;
+    let mut current_timestamp: Option<String> = None;
     let mut last_assistant_text = String::new();
 
     for line in &lines {
@@ -517,10 +520,12 @@ pub fn extract_conversation_turns(path: &Path, max_turns: usize) -> Result<Vec<C
                             std::mem::take(&mut last_assistant_text),
                             MAX_TURN_CHARS,
                         ),
+                        timestamp: current_timestamp.take(),
                     });
                 }
 
                 current_prompt = Some(text);
+                current_timestamp = entry.timestamp.clone();
                 last_assistant_text.clear();
             }
             "assistant" => {
@@ -555,6 +560,7 @@ pub fn extract_conversation_turns(path: &Path, max_turns: usize) -> Result<Vec<C
         turns.push(ConversationTurn {
             user_prompt: truncate_with_ellipsis(prompt, MAX_TURN_CHARS),
             assistant_response: truncate_with_ellipsis(last_assistant_text, MAX_TURN_CHARS),
+            timestamp: current_timestamp,
         });
     }
 
@@ -961,5 +967,26 @@ mod tests {
         assert!(turns[0].user_prompt.ends_with("..."));
         assert_eq!(turns[0].assistant_response.chars().count(), 5003);
         assert!(turns[0].assistant_response.ends_with("..."));
+    }
+
+    #[test]
+    fn test_extract_turns_with_timestamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.jsonl");
+        let content = [
+            r#"{"type":"user","timestamp":"2026-01-23T16:00:00.000Z","message":{"content":"hello"}}"#,
+            r#"{"type":"assistant","timestamp":"2026-01-23T16:00:05.000Z","message":{"content":[{"type":"text","text":"Hi!"}]}}"#,
+        ]
+        .join("\n");
+        std::fs::write(&path, content).unwrap();
+
+        let turns = extract_conversation_turns(&path, 50).unwrap();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].user_prompt, "hello");
+        assert_eq!(turns[0].assistant_response, "Hi!");
+        assert_eq!(
+            turns[0].timestamp.as_deref(),
+            Some("2026-01-23T16:00:00.000Z")
+        );
     }
 }
