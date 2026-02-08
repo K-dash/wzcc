@@ -102,12 +102,7 @@ wzcc
 
 # Or explicitly specify TUI mode
 wzcc tui
-
-# Start background daemon (experimental - updates tab titles with session status)
-wzcc daemon
 ```
-
-**Note**: Daemon mode is experimental. It monitors sessions in the current workspace and updates WezTerm tab titles with status. Polling interval is 3 seconds. Currently only works in the current workspace.
 
 ### Using wzcc
 
