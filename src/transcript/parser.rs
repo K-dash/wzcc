@@ -432,6 +432,139 @@ pub fn get_last_assistant_text(path: &Path, max_chars: usize) -> Result<Option<S
     Ok(extract_last_assistant_text(&snapshot, max_chars))
 }
 
+/// A conversation turn: a user prompt paired with the assistant's response.
+#[derive(Debug, Clone)]
+pub struct ConversationTurn {
+    pub user_prompt: String,
+    pub assistant_response: String,
+}
+
+/// Extract conversation turns from a transcript file.
+/// Returns turns in reverse chronological order (newest first).
+/// Reads up to `max_turns` most recent turns.
+pub fn extract_conversation_turns(path: &Path, max_turns: usize) -> Result<Vec<ConversationTurn>> {
+    // Use larger seek_multiplier for more history coverage
+    let lines = read_lines_from_end(path, 100)?;
+
+    let mut turns: Vec<ConversationTurn> = Vec::new();
+    let mut current_prompt: Option<String> = None;
+    let mut last_assistant_text = String::new();
+
+    for line in &lines {
+        // Quick type check to avoid unnecessary full parsing
+        #[derive(Deserialize)]
+        struct TypeOnly {
+            #[serde(rename = "type")]
+            type_: String,
+        }
+        let entry_type = match serde_json::from_str::<TypeOnly>(line) {
+            Ok(t) => t.type_,
+            Err(_) => continue,
+        };
+
+        match entry_type.as_str() {
+            "user" => {
+                let entry: UserTranscriptEntry = match serde_json::from_str(line) {
+                    Ok(e) => e,
+                    Err(_) => continue,
+                };
+
+                if entry.is_meta == Some(true) {
+                    continue;
+                }
+
+                let Some(msg) = &entry.message else {
+                    continue;
+                };
+
+                let text = match &msg.content {
+                    UserContent::Text(s) => {
+                        if s.contains("tool_result") && !s.contains('\n') {
+                            continue;
+                        }
+                        let cleaned = remove_system_reminders(s);
+                        if cleaned.trim().is_empty() {
+                            continue;
+                        }
+                        cleaned
+                    }
+                    UserContent::Blocks(blocks) => {
+                        if blocks.iter().any(|b| b.type_ == "tool_result") {
+                            continue;
+                        }
+                        let raw = blocks
+                            .iter()
+                            .filter(|b| b.type_ == "text")
+                            .filter_map(|b| b.text.as_ref())
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        let cleaned = remove_system_reminders(&raw);
+                        if cleaned.trim().is_empty() {
+                            continue;
+                        }
+                        cleaned
+                    }
+                    UserContent::Empty => continue,
+                };
+
+                // Save previous turn if exists
+                if let Some(prev_prompt) = current_prompt.take() {
+                    const MAX_TURN_CHARS: usize = 5000;
+                    turns.push(ConversationTurn {
+                        user_prompt: truncate_with_ellipsis(prev_prompt, MAX_TURN_CHARS),
+                        assistant_response: truncate_with_ellipsis(
+                            std::mem::take(&mut last_assistant_text),
+                            MAX_TURN_CHARS,
+                        ),
+                    });
+                }
+
+                current_prompt = Some(text);
+                last_assistant_text.clear();
+            }
+            "assistant" => {
+                let entry: TranscriptEntry = match serde_json::from_str(line) {
+                    Ok(e) => e,
+                    Err(_) => continue,
+                };
+
+                if let Some(msg) = &entry.message {
+                    let text: String = msg
+                        .content
+                        .iter()
+                        .filter(|c| c.type_ == "text")
+                        .filter_map(|c| c.text.as_ref())
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join("\n");
+
+                    if !text.is_empty() {
+                        // Keep only the last assistant text for this turn
+                        last_assistant_text = text;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Handle final turn
+    if let Some(prompt) = current_prompt {
+        const MAX_TURN_CHARS: usize = 5000;
+        turns.push(ConversationTurn {
+            user_prompt: truncate_with_ellipsis(prompt, MAX_TURN_CHARS),
+            assistant_response: truncate_with_ellipsis(last_assistant_text, MAX_TURN_CHARS),
+        });
+    }
+
+    // Reverse to newest-first, then truncate
+    turns.reverse();
+    turns.truncate(max_turns);
+
+    Ok(turns)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -711,5 +844,122 @@ mod tests {
         let json = r#"{"type":"user","timestamp":"2026-01-23T16:29:06.719Z","message":{"content":[{"type":"text","text":"[Request interrupted by user]"}]}}"#;
         let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
         assert!(entry.is_interrupted());
+    }
+
+    // --- extract_conversation_turns tests ---
+
+    #[test]
+    fn test_extract_turns_basic() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.jsonl");
+        let content = [
+            r#"{"type":"user","message":{"content":"hello"}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Hi there!"}]}}"#,
+            r#"{"type":"user","message":{"content":"fix the bug"}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Done!"}]}}"#,
+        ]
+        .join("\n");
+        std::fs::write(&path, content).unwrap();
+
+        let turns = extract_conversation_turns(&path, 50).unwrap();
+        assert_eq!(turns.len(), 2);
+        // Newest first
+        assert_eq!(turns[0].user_prompt, "fix the bug");
+        assert_eq!(turns[0].assistant_response, "Done!");
+        assert_eq!(turns[1].user_prompt, "hello");
+        assert_eq!(turns[1].assistant_response, "Hi there!");
+    }
+
+    #[test]
+    fn test_extract_turns_skips_tool_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.jsonl");
+        let content = [
+            r#"{"type":"user","message":{"content":"fix it"}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Let me check..."},{"type":"tool_use","name":"Read"}]}}"#,
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","content":"file data"}]}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Fixed!"}]}}"#,
+        ]
+        .join("\n");
+        std::fs::write(&path, content).unwrap();
+
+        let turns = extract_conversation_turns(&path, 50).unwrap();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].user_prompt, "fix it");
+        // Should keep the LAST assistant text (overwrite intermediate)
+        assert_eq!(turns[0].assistant_response, "Fixed!");
+    }
+
+    #[test]
+    fn test_extract_turns_max_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.jsonl");
+        let mut lines = Vec::new();
+        for i in 0..10 {
+            lines.push(format!(
+                r#"{{"type":"user","message":{{"content":"prompt {}"}}}}"#,
+                i
+            ));
+            lines.push(format!(
+                r#"{{"type":"assistant","message":{{"content":[{{"type":"text","text":"response {}"}}]}}}}"#,
+                i
+            ));
+        }
+        std::fs::write(&path, lines.join("\n")).unwrap();
+
+        let turns = extract_conversation_turns(&path, 3).unwrap();
+        assert_eq!(turns.len(), 3);
+        // Newest first, so turn 9, 8, 7
+        assert_eq!(turns[0].user_prompt, "prompt 9");
+        assert_eq!(turns[2].user_prompt, "prompt 7");
+    }
+
+    #[test]
+    fn test_extract_turns_empty_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.jsonl");
+        std::fs::write(&path, "").unwrap();
+
+        let turns = extract_conversation_turns(&path, 50).unwrap();
+        assert!(turns.is_empty());
+    }
+
+    #[test]
+    fn test_extract_turns_prompt_without_response() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.jsonl");
+        let content = r#"{"type":"user","message":{"content":"waiting..."}}"#;
+        std::fs::write(&path, content).unwrap();
+
+        let turns = extract_conversation_turns(&path, 50).unwrap();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].user_prompt, "waiting...");
+        assert_eq!(turns[0].assistant_response, "");
+    }
+
+    #[test]
+    fn test_extract_turns_truncates_long_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.jsonl");
+        // Create text exceeding the 5000-char limit
+        let long_prompt = "x".repeat(6000);
+        let long_response = "y".repeat(6000);
+        let content = format!(
+            r#"{{"type":"user","message":{{"content":"{}"}}}}"#,
+            long_prompt
+        ) + "\n"
+            + &format!(
+                r#"{{"type":"assistant","message":{{"content":[{{"type":"text","text":"{}"}}]}}}}"#,
+                long_response
+            );
+        std::fs::write(&path, content).unwrap();
+
+        let turns = extract_conversation_turns(&path, 50).unwrap();
+        assert_eq!(turns.len(), 1);
+        // 5000 chars + "..." = 5003 chars
+        assert_eq!(turns[0].user_prompt.chars().count(), 5003);
+        assert!(turns[0].user_prompt.ends_with("..."));
+        assert_eq!(turns[0].assistant_response.chars().count(), 5003);
+        assert!(turns[0].assistant_response.ends_with("..."));
     }
 }
