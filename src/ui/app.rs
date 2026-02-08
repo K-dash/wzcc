@@ -84,7 +84,7 @@ pub struct App {
     /// Current history index for detail view (0 = newest)
     history_index: usize,
     /// Scroll offset within the current history turn detail (line-level)
-    history_scroll_offset: u16,
+    history_scroll_offset: usize,
     /// Pre-parsed timestamps for history turns (avoids per-frame parsing)
     history_timestamps: Vec<Option<SystemTime>>,
     /// User configuration loaded from ~/.config/wzcc/config.toml
@@ -915,7 +915,7 @@ impl App {
                         KeyCode::Char('G') => {
                             // G -> scroll to bottom (clamped in render)
                             self.pending_g = false;
-                            self.history_scroll_offset = u16::MAX;
+                            self.history_scroll_offset = usize::MAX;
                             self.dirty = true;
                         }
                         _ => {
