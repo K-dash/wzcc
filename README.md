@@ -9,7 +9,7 @@ A TUI tool to list and navigate Claude Code sessions running in WezTerm tabs/pan
 <div align="center">
   <a href="https://github.com/K-dash/wzcc/graphs/commit-activity"><img alt="GitHub commit activity" src="https://img.shields.io/github/commit-activity/m/K-dash/wzcc"/></a>
   <a href="https://github.com/K-dash/wzcc/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/LICENSE-MIT-green"/></a>
-  <a href="https://www.rust-lang.org/"><img alt="Rust" src="https://img.shields.io/badge/rust-1.70+-orange.svg"/></a>
+  <a href="https://www.rust-lang.org/"><img alt="Rust" src="https://img.shields.io/badge/rust-1.74+-orange.svg"/></a>
 </div>
 
 <p>
@@ -76,7 +76,7 @@ wzcc simplifies management of multiple Claude Code sessions in WezTerm. Instead 
   - Must be run **inside WezTerm** (relies on `WEZTERM_PANE` environment variable)
   - Does not work in external terminals or SSH sessions
 - **macOS 14+** (Linux support in progress)
-- **Rust 1.70+** (to build from source)
+- **Rust 1.74+** (to build from source)
 
 ### Installation
 
@@ -92,7 +92,7 @@ cargo install --path .
 wzcc install
 ```
 
-> **Note**: `wzcc install` sets up workspace switching and statusLine bridge for accurate session detection. See [Limitations](#limitations) for details on what each component does.
+> **Note**: `wzcc install` sets up workspace switching and statusLine bridge for accurate session detection. See [Limitations](#limitations) for details on what each component does. To remove all components, run `wzcc uninstall`.
 
 ### Running
 
@@ -115,7 +115,7 @@ wzcc tui
 | `1-9` | Quick select & focus session by number |
 | `g` + `g` | Jump to first session |
 | `G` | Jump to last session |
-| `h` / `l` | Resize details panel (h: shrink, l: expand) |
+| `h` / `l` | Resize details panel (h: expand, l: shrink) |
 | `i` | Open prompt input (send text to selected session) |
 | `x` | Kill (close) selected session's pane (with confirmation) |
 | `a` | Add new Claude Code session (split selected pane, then choose `r`ight/`d`own/`t`ab) |
