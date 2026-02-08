@@ -17,8 +17,6 @@ struct Cli {
 enum Commands {
     /// Start TUI mode (default)
     Tui,
-    /// Start daemon mode (background monitoring)
-    Daemon,
     /// Install all components (bridge + workspace-switcher)
     Install,
     /// Uninstall all components (bridge + workspace-switcher)
@@ -40,9 +38,6 @@ fn main() -> Result<()> {
         None | Some(Commands::Tui) => {
             let mut app = App::new();
             app.run()?;
-        }
-        Some(Commands::Daemon) => {
-            run_daemon()?;
         }
         Some(Commands::Install) => {
             println!("Installing all wzcc components...\n");
@@ -73,16 +68,4 @@ fn main() -> Result<()> {
     }
 
     Ok(())
-}
-
-fn run_daemon() -> Result<()> {
-    println!("Starting wzcc daemon...");
-
-    // TODO: Implementation
-    // 1. Detect Claude Code sessions in current workspace
-    // 2. Watch transcript files
-    // 3. Change tab name on status change
-
-    let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(async { wzcc::daemon::run().await })
 }
