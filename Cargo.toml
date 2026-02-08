@@ -1,6 +1,6 @@
 [package]
 name = "wzcc"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "A TUI tool to list and navigate Claude Code sessions running in WezTerm"
 license = "MIT"
