@@ -254,7 +254,7 @@ pub fn render_details(
     history_mode: bool,
     history_turns: &[ConversationTurn],
     history_index: usize,
-    history_scroll_offset: u16,
+    history_scroll_offset: &mut u16,
 ) {
     // History browsing mode: render history view instead of normal details
     if history_mode && !history_turns.is_empty() {
@@ -536,7 +536,7 @@ fn render_history_details(
     area: Rect,
     turns: &[ConversationTurn],
     index: usize,
-    scroll_offset: u16,
+    scroll_offset: &mut u16,
 ) {
     let turn = &turns[index];
     let total = turns.len();
@@ -590,10 +590,12 @@ fn render_history_details(
     }
 
     // Clamp scroll offset to prevent overscroll beyond content
+    // Write back to caller so the App state stays in bounds
     let content_height = lines.len() as u16;
     let viewport_height = area.height.saturating_sub(2); // minus borders
     let max_scroll = content_height.saturating_sub(viewport_height);
-    let clamped_offset = scroll_offset.min(max_scroll);
+    *scroll_offset = (*scroll_offset).min(max_scroll);
+    let clamped_offset = *scroll_offset;
 
     let title = format!(" History ({}/{}) ", turn_num, total);
     let paragraph = Paragraph::new(lines)

@@ -936,4 +936,30 @@ mod tests {
         assert_eq!(turns[0].user_prompt, "waiting...");
         assert_eq!(turns[0].assistant_response, "");
     }
+
+    #[test]
+    fn test_extract_turns_truncates_long_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.jsonl");
+        // Create text exceeding the 5000-char limit
+        let long_prompt = "x".repeat(6000);
+        let long_response = "y".repeat(6000);
+        let content = format!(
+            r#"{{"type":"user","message":{{"content":"{}"}}}}"#,
+            long_prompt
+        ) + "\n"
+            + &format!(
+                r#"{{"type":"assistant","message":{{"content":[{{"type":"text","text":"{}"}}]}}}}"#,
+                long_response
+            );
+        std::fs::write(&path, content).unwrap();
+
+        let turns = extract_conversation_turns(&path, 50).unwrap();
+        assert_eq!(turns.len(), 1);
+        // 5000 chars + "..." = 5003 chars
+        assert_eq!(turns[0].user_prompt.chars().count(), 5003);
+        assert!(turns[0].user_prompt.ends_with("..."));
+        assert_eq!(turns[0].assistant_response.chars().count(), 5003);
+        assert!(turns[0].assistant_response.ends_with("..."));
+    }
 }

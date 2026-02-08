@@ -823,6 +823,7 @@ impl App {
                         }
                         KeyCode::Char('G') => {
                             // G -> jump to oldest
+                            self.pending_g = false;
                             if !self.history_turns.is_empty() {
                                 self.history_index = self.history_turns.len() - 1;
                                 self.history_scroll_offset = 0;
@@ -1073,7 +1074,7 @@ impl App {
             self.history_mode,
             &self.history_turns,
             self.history_index,
-            self.history_scroll_offset,
+            &mut self.history_scroll_offset,
         );
 
         // Render footer with keybindings help
