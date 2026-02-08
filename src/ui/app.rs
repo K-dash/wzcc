@@ -6,7 +6,7 @@ use crate::datasource::{
 };
 use crate::detector::ClaudeCodeDetector;
 use crate::session_mapping::SessionMapping;
-use crate::transcript::TranscriptWatcher;
+use crate::transcript::{ConversationTurn, TranscriptWatcher};
 use anyhow::Result;
 use crossterm::{
     event::{
@@ -75,6 +75,12 @@ pub struct App {
     kill_confirm: Option<(u32, String)>,
     /// Add pane mode: stores (pane_id, cwd) for split direction selection
     add_pane_pending: Option<(u32, String)>,
+    /// History browsing mode
+    history_mode: bool,
+    /// Conversation turns for history browsing (newest first)
+    history_turns: Vec<ConversationTurn>,
+    /// Current history index (0 = newest)
+    history_index: usize,
     /// User configuration loaded from ~/.config/wzcc/config.toml
     config: Config,
     /// Git branch cache (30s TTL)
@@ -125,6 +131,9 @@ impl App {
             toast,
             kill_confirm: None,
             add_pane_pending: None,
+            history_mode: false,
+            history_turns: Vec::new(),
+            history_index: 0,
             config,
             git_branch_cache: GitBranchCache::new(30),
             last_transcript_refresh: Instant::now(),
@@ -548,6 +557,61 @@ impl App {
         self.dirty = true;
     }
 
+    /// Enter history browsing mode for the selected session
+    fn enter_history_mode(&mut self) {
+        if let Some(i) = self.list_state.selected() {
+            if let Some(session) = self.sessions.get(i) {
+                if let Some(path) = &session.transcript_path {
+                    match crate::transcript::extract_conversation_turns(path, 50) {
+                        Ok(turns) if !turns.is_empty() => {
+                            self.history_turns = turns;
+                            self.history_index = 0;
+                            self.history_mode = true;
+                            self.dirty = true;
+                            self.needs_full_redraw = true;
+                        }
+                        Ok(_) => {
+                            self.toast = Some(Toast::error("No conversation history".to_string()));
+                            self.dirty = true;
+                        }
+                        Err(_) => {
+                            self.toast = Some(Toast::error("Failed to read history".to_string()));
+                            self.dirty = true;
+                        }
+                    }
+                } else {
+                    self.toast = Some(Toast::error("No transcript available".to_string()));
+                    self.dirty = true;
+                }
+            }
+        }
+    }
+
+    /// Exit history browsing mode
+    fn exit_history_mode(&mut self) {
+        self.history_mode = false;
+        self.history_turns.clear();
+        self.history_index = 0;
+        self.dirty = true;
+        self.needs_full_redraw = true;
+    }
+
+    /// Navigate to older turn in history (j/down)
+    fn history_older(&mut self) {
+        if self.history_index + 1 < self.history_turns.len() {
+            self.history_index += 1;
+            self.dirty = true;
+        }
+    }
+
+    /// Navigate to newer turn in history (k/up)
+    fn history_newer(&mut self) {
+        if self.history_index > 0 {
+            self.history_index -= 1;
+            self.dirty = true;
+        }
+    }
+
     /// Run TUI
     pub fn run(&mut self) -> Result<()> {
         // Clean up stale session mappings for TTYs that no longer exist
@@ -711,6 +775,40 @@ impl App {
                         }
                     }
                 }
+                Event::Key(key) if self.history_mode => {
+                    // History browsing mode key handling
+                    match key.code {
+                        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('H') => {
+                            self.exit_history_mode();
+                        }
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            self.history_older();
+                        }
+                        KeyCode::Char('k') | KeyCode::Up => {
+                            self.history_newer();
+                        }
+                        KeyCode::Char('g') => {
+                            if self.pending_g {
+                                // gg -> jump to newest
+                                self.history_index = 0;
+                                self.dirty = true;
+                                self.pending_g = false;
+                            } else {
+                                self.pending_g = true;
+                            }
+                        }
+                        KeyCode::Char('G') => {
+                            // G -> jump to oldest
+                            if !self.history_turns.is_empty() {
+                                self.history_index = self.history_turns.len() - 1;
+                                self.dirty = true;
+                            }
+                        }
+                        _ => {
+                            self.pending_g = false;
+                        }
+                    }
+                }
                 Event::Key(key) => {
                     // Normal mode key handling
                     // Handle gg sequence
@@ -759,6 +857,9 @@ impl App {
                     } else if key.code == KeyCode::Char('x') {
                         // Request kill for selected session (shows confirmation)
                         self.request_kill_selected();
+                    } else if key.code == KeyCode::Char('H') {
+                        // Enter history browsing mode
+                        self.enter_history_mode();
                     } else if key.code == KeyCode::Char('a') {
                         // Enter add-pane mode (split direction selection)
                         self.request_add_pane();
@@ -944,6 +1045,9 @@ impl App {
             self.input_mode,
             self.input_buffer.as_str(),
             self.input_buffer.cursor(),
+            self.history_mode,
+            &self.history_turns,
+            self.history_index,
         );
 
         // Render footer with keybindings help
@@ -951,6 +1055,7 @@ impl App {
             f,
             footer_area,
             self.input_mode,
+            self.history_mode,
             self.toast.as_ref(),
             self.kill_confirm.as_ref(),
             self.add_pane_pending.as_ref(),

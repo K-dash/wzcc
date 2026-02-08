@@ -8,6 +8,8 @@ use ratatui::{
 use std::time::SystemTime;
 use unicode_width::UnicodeWidthChar;
 
+use crate::transcript::ConversationTurn;
+
 use super::session::{status_display, wrap_text_lines, ClaudeSession};
 
 /// Format a duration as a relative time string (e.g., "5s", "2m", "1h", "3d").
@@ -240,6 +242,7 @@ pub fn render_list(
 }
 
 /// Render the details panel.
+#[allow(clippy::too_many_arguments)]
 pub fn render_details(
     f: &mut ratatui::Frame,
     area: Rect,
@@ -248,7 +251,16 @@ pub fn render_details(
     input_mode: bool,
     input_buffer: &str,
     cursor_position: usize,
+    history_mode: bool,
+    history_turns: &[ConversationTurn],
+    history_index: usize,
 ) {
+    // History browsing mode: render history view instead of normal details
+    if history_mode && !history_turns.is_empty() {
+        render_history_details(f, area, history_turns, history_index);
+        return;
+    }
+
     let text = if let Some(i) = selected {
         if let Some(session) = sessions.get(i) {
             let pane = &session.pane;
@@ -517,11 +529,87 @@ pub fn render_details(
     }
 }
 
+/// Render details panel in history browsing mode.
+fn render_history_details(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    turns: &[ConversationTurn],
+    index: usize,
+) {
+    let turn = &turns[index];
+    let total = turns.len();
+    let turn_num = total - index; // Display as 1-based chronological number
+    let inner_width = (area.width.saturating_sub(2)) as usize;
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    // Prompt section
+    lines.push(Line::from(vec![Span::styled(
+        "💬 Prompt:",
+        Style::default()
+            .add_modifier(Modifier::BOLD)
+            .fg(Color::Cyan),
+    )]));
+
+    let prompt_max_lines = (area.height as usize).saturating_sub(8) / 3;
+    let prompt_lines = wrap_text_lines(
+        &turn.user_prompt,
+        inner_width,
+        prompt_max_lines.max(3),
+        Color::White,
+    );
+    lines.extend(prompt_lines);
+
+    // Separator
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![Span::styled(
+        "─".repeat(inner_width),
+        Style::default().fg(Color::DarkGray),
+    )]));
+
+    // Response section
+    lines.push(Line::from(vec![Span::styled(
+        "🤖 Response:",
+        Style::default()
+            .add_modifier(Modifier::BOLD)
+            .fg(Color::Green),
+    )]));
+
+    if turn.assistant_response.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "(no response yet)",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        let response_max_lines = (area.height as usize).saturating_sub(lines.len() + 3);
+        let response_lines = wrap_text_lines(
+            &turn.assistant_response,
+            inner_width,
+            response_max_lines.max(3),
+            Color::Gray,
+        );
+        lines.extend(response_lines);
+    }
+
+    let title = format!(" History ({}/{}) ", turn_num, total);
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .border_style(Style::default().fg(Color::Yellow)),
+        )
+        .wrap(Wrap { trim: false });
+
+    f.render_widget(paragraph, area);
+}
+
 /// Render the footer with keybindings help.
 pub fn render_footer(
     f: &mut ratatui::Frame,
     area: Rect,
     input_mode: bool,
+    history_mode: bool,
     toast: Option<&super::toast::Toast>,
     kill_confirm: Option<&(u32, String)>,
     add_pane_pending: Option<&(u32, String)>,
@@ -598,7 +686,18 @@ pub fn render_footer(
         return;
     }
 
-    let help_text = if input_mode {
+    let help_text = if history_mode {
+        Line::from(vec![
+            Span::styled("[↑↓/jk]", Style::default().fg(Color::Yellow)),
+            Span::raw("Browse "),
+            Span::styled("[gg]", Style::default().fg(Color::Yellow)),
+            Span::raw("Newest "),
+            Span::styled("[G]", Style::default().fg(Color::Yellow)),
+            Span::raw("Oldest "),
+            Span::styled("[Esc/q]", Style::default().fg(Color::Yellow)),
+            Span::raw("Back"),
+        ])
+    } else if input_mode {
         Line::from(vec![
             Span::styled("[Enter]", Style::default().fg(Color::Cyan)),
             Span::raw("Send "),
@@ -623,6 +722,8 @@ pub fn render_footer(
             Span::raw("Quick "),
             Span::styled("[h/l]", Style::default().fg(Color::Cyan)),
             Span::raw("Resize "),
+            Span::styled("[H]", Style::default().fg(Color::Cyan)),
+            Span::raw("History "),
             Span::styled("[r]", Style::default().fg(Color::Cyan)),
             Span::raw("Refresh "),
             Span::styled("[x]", Style::default().fg(Color::Cyan)),
