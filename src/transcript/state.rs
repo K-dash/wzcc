@@ -94,11 +94,24 @@ pub fn detect_session_status_with_config(
     path: &Path,
     config: &DetectionConfig,
 ) -> Result<SessionStatus> {
-    // Read the last few entries to determine state
     let entries = read_last_entries(path, 10)?;
+    Ok(detect_status_from_entries_with_config(&entries, config))
+}
 
+/// Detect session status from pre-parsed entries with default configuration.
+pub fn detect_session_status_from_entries(entries: &[TranscriptEntry]) -> SessionStatus {
+    detect_status_from_entries_with_config(entries, &DetectionConfig::default())
+}
+
+/// Detect session status from pre-parsed entries with custom configuration.
+/// This is the core logic, extracted to avoid re-reading the file when
+/// status detection is combined with other transcript queries.
+pub fn detect_status_from_entries_with_config(
+    entries: &[TranscriptEntry],
+    config: &DetectionConfig,
+) -> SessionStatus {
     if entries.is_empty() {
-        return Ok(SessionStatus::Unknown);
+        return SessionStatus::Unknown;
     }
 
     // Find the last meaningful entry
@@ -106,12 +119,12 @@ pub fn detect_session_status_with_config(
 
     // Check for progress type - Processing (but not hook_progress which is just session hooks)
     if last.is_progress() && !last.is_hook_progress() {
-        return Ok(SessionStatus::Processing);
+        return SessionStatus::Processing;
     }
 
     // Check for system stop_hook_summary or turn_duration - indicates Idle
     if last.is_stop_hook_summary() || last.is_turn_duration() {
-        return Ok(SessionStatus::Idle);
+        return SessionStatus::Idle;
     }
 
     // For system entries (other than stop_hook_summary/turn_duration), internal entries
@@ -124,42 +137,42 @@ pub fn detect_session_status_with_config(
             }
 
             if entry.is_stop_hook_summary() || entry.is_turn_duration() || entry.is_end_turn() {
-                return Ok(SessionStatus::Idle);
+                return SessionStatus::Idle;
             }
             if entry.type_ == "assistant" && !entry.is_tool_use() {
-                return Ok(SessionStatus::Idle);
+                return SessionStatus::Idle;
             }
             if entry.is_tool_use() {
-                return Ok(check_tool_use_status(entry, config));
+                return check_tool_use_status(entry, config);
             }
             if entry.type_ == "user" || entry.is_progress() {
-                return Ok(SessionStatus::Processing);
+                return SessionStatus::Processing;
             }
         }
 
         // No meaningful entries found - this is a fresh session (e.g., after /clear)
-        return Ok(SessionStatus::Ready);
+        return SessionStatus::Ready;
     }
 
     // Check for assistant with end_turn - Idle
     if last.is_end_turn() {
-        return Ok(SessionStatus::Idle);
+        return SessionStatus::Idle;
     }
 
     // Check for assistant with tool_use
     if last.is_tool_use() {
-        return Ok(check_tool_use_status(last, config));
+        return check_tool_use_status(last, config);
     }
 
     // Check for assistant with text only (no tool_use) - this means Claude finished responding
     // and is waiting for user input, so it's Idle
     if last.type_ == "assistant" && !last.is_tool_use() {
-        return Ok(SessionStatus::Idle);
+        return SessionStatus::Idle;
     }
 
     // Check for interrupted user entry - Idle (Claude hasn't started responding yet)
     if last.is_interrupted() {
-        return Ok(SessionStatus::Idle);
+        return SessionStatus::Idle;
     }
 
     // Check for user entry with tool_result - Processing (waiting for next response)
@@ -168,15 +181,15 @@ pub fn detect_session_status_with_config(
         // Look back to see if there's an interruption message after the tool_result
         for entry in entries.iter().rev().skip(1).take(3) {
             if entry.is_interrupted() {
-                return Ok(SessionStatus::Idle);
+                return SessionStatus::Idle;
             }
         }
-        return Ok(SessionStatus::Processing);
+        return SessionStatus::Processing;
     }
 
     // Check for user entry (not tool_result) - Processing (Claude is about to respond)
     if last.type_ == "user" {
-        return Ok(SessionStatus::Processing);
+        return SessionStatus::Processing;
     }
 
     // Look back to find the most recent user message, then check what happened after
@@ -190,14 +203,14 @@ pub fn detect_session_status_with_config(
         // If turn_duration or stop_hook_summary exists after user message, it's Idle
         for entry in after_user.iter() {
             if entry.is_stop_hook_summary() || entry.is_turn_duration() || entry.is_end_turn() {
-                return Ok(SessionStatus::Idle);
+                return SessionStatus::Idle;
             }
         }
 
         // If progress exists after user message (and no turn_duration), it's Processing
         for entry in after_user.iter() {
             if entry.is_progress() {
-                return Ok(SessionStatus::Processing);
+                return SessionStatus::Processing;
             }
         }
     }
@@ -206,12 +219,12 @@ pub fn detect_session_status_with_config(
     if last.type_ == "assistant" {
         if let Some(msg) = &last.message {
             if msg.stop_reason.is_none() {
-                return Ok(SessionStatus::Processing);
+                return SessionStatus::Processing;
             }
         }
     }
 
-    Ok(SessionStatus::Unknown)
+    SessionStatus::Unknown
 }
 
 #[cfg(test)]
