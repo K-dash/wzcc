@@ -1,0 +1,46 @@
+name: Publish to crates.io
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag version (e.g., v0.1.0)"
+        required: false
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify tag matches crate version
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            TAG_VERSION="${{ inputs.tag }}"
+            TAG_VERSION="${TAG_VERSION#v}"
+          else
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          CRATE_VERSION=$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[] | select(.name=="wzcc") | .version')
+          echo "Tag version: ${TAG_VERSION}"
+          echo "Crate version: ${CRATE_VERSION}"
+          if [ "${TAG_VERSION}" != "${CRATE_VERSION}" ]; then
+            echo "::error::Tag version (${TAG_VERSION}) must match crate version (${CRATE_VERSION})"
+            exit 1
+          fi
+
+      - name: Publish to crates.io
+        run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
