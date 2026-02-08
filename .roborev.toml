@@ -1,6 +1,7 @@
 agent = "codex"
 
 review_guidelines = """
+- All review output (summary, findings, suggestions) MUST be written in Japanese
 - Rust 2021 edition compliance
 - Code must pass cargo fmt and clippy -D warnings
 - No security vulnerabilities (OWASP top 10 awareness)
