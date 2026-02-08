@@ -7,10 +7,22 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::Path;
 
-/// Remove <system-reminder>...</system-reminder> tags from text.
-fn remove_system_reminders(text: &str) -> String {
-    let re = Regex::new(r"<system-reminder>[\s\S]*?</system-reminder>").unwrap();
-    re.replace_all(text, "").trim().to_string()
+/// Remove internal XML tags (system-reminder, local-command-*, command-*) from text.
+fn remove_internal_tags(text: &str) -> String {
+    const TAGS: &[&str] = &[
+        "system-reminder",
+        "local-command-stdout",
+        "local-command-caveat",
+        "command-name",
+        "command-message",
+        "command-args",
+    ];
+    let mut result = text.to_string();
+    for tag in TAGS {
+        let re = Regex::new(&format!(r"<{0}>[\s\S]*?</{0}>", regex::escape(tag))).unwrap();
+        result = re.replace_all(&result, "").to_string();
+    }
+    result.trim().to_string()
 }
 
 /// Truncate text to max_chars, appending "..." if truncated.
@@ -350,7 +362,7 @@ pub fn extract_last_user_prompt(snapshot: &TranscriptSnapshot, max_chars: usize)
                 if s.contains("tool_result") && !s.contains('\n') {
                     continue;
                 }
-                let cleaned = remove_system_reminders(s);
+                let cleaned = remove_internal_tags(s);
                 if cleaned.trim().is_empty() {
                     continue;
                 }
@@ -367,7 +379,7 @@ pub fn extract_last_user_prompt(snapshot: &TranscriptSnapshot, max_chars: usize)
                     .cloned()
                     .collect::<Vec<_>>()
                     .join("\n");
-                let cleaned = remove_system_reminders(&raw_text);
+                let cleaned = remove_internal_tags(&raw_text);
                 if cleaned.trim().is_empty() {
                     continue;
                 }
@@ -485,7 +497,7 @@ pub fn extract_conversation_turns(path: &Path, max_turns: usize) -> Result<Vec<C
                         if s.contains("tool_result") && !s.contains('\n') {
                             continue;
                         }
-                        let cleaned = remove_system_reminders(s);
+                        let cleaned = remove_internal_tags(s);
                         if cleaned.trim().is_empty() {
                             continue;
                         }
@@ -502,7 +514,7 @@ pub fn extract_conversation_turns(path: &Path, max_turns: usize) -> Result<Vec<C
                             .cloned()
                             .collect::<Vec<_>>()
                             .join("\n");
-                        let cleaned = remove_system_reminders(&raw);
+                        let cleaned = remove_internal_tags(&raw);
                         if cleaned.trim().is_empty() {
                             continue;
                         }
@@ -732,29 +744,29 @@ mod tests {
         assert!(!entry.is_tool_result());
     }
 
-    // remove_system_reminders tests
+    // remove_internal_tags tests
     #[test]
-    fn test_remove_system_reminders() {
+    fn test_remove_internal_tags() {
         let text = "Hello <system-reminder>some reminder</system-reminder> World";
-        assert_eq!(remove_system_reminders(text), "Hello  World");
+        assert_eq!(remove_internal_tags(text), "Hello  World");
     }
 
     #[test]
-    fn test_remove_system_reminders_multiline() {
+    fn test_remove_internal_tags_multiline() {
         let text = "Hello <system-reminder>\nmultiline\nreminder\n</system-reminder> World";
-        assert_eq!(remove_system_reminders(text), "Hello  World");
+        assert_eq!(remove_internal_tags(text), "Hello  World");
     }
 
     #[test]
-    fn test_remove_system_reminders_multiple() {
+    fn test_remove_internal_tags_multiple() {
         let text = "<system-reminder>first</system-reminder> Middle <system-reminder>second</system-reminder>";
-        assert_eq!(remove_system_reminders(text), "Middle");
+        assert_eq!(remove_internal_tags(text), "Middle");
     }
 
     #[test]
-    fn test_remove_system_reminders_none() {
+    fn test_remove_internal_tags_none() {
         let text = "No reminders here";
-        assert_eq!(remove_system_reminders(text), "No reminders here");
+        assert_eq!(remove_internal_tags(text), "No reminders here");
     }
 
     // get_tool_names tests
