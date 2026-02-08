@@ -2,6 +2,13 @@
 name = "wzcc"
 version = "0.1.0"
 edition = "2021"
+description = "A TUI tool to list and navigate Claude Code sessions running in WezTerm"
+license = "MIT"
+repository = "https://github.com/K-dash/wzcc"
+homepage = "https://github.com/K-dash/wzcc"
+readme = "README.md"
+keywords = ["wezterm", "claude-code", "tui", "terminal", "session-manager"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 ratatui = "0.29"

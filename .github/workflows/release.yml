@@ -1,0 +1,89 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify-version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify tag matches crate version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CRATE_VERSION=$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[] | select(.name=="wzcc") | .version')
+          echo "Tag version: ${TAG_VERSION}"
+          echo "Crate version: ${CRATE_VERSION}"
+          if [ "${TAG_VERSION}" != "${CRATE_VERSION}" ]; then
+            echo "::error::Tag version (${TAG_VERSION}) must match crate version (${CRATE_VERSION})"
+            exit 1
+          fi
+
+  build:
+    needs: verify-version
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Build release binary
+        run: cargo build --release --target aarch64-apple-darwin
+
+      - name: Package binary
+        run: |
+          mkdir -p dist
+          strip target/aarch64-apple-darwin/release/wzcc || true
+          tar -C target/aarch64-apple-darwin/release -czf dist/wzcc-macos-aarch64.tar.gz wzcc
+
+      - name: Generate SHA256 checksum
+        run: |
+          cd dist
+          shasum -a 256 wzcc-macos-aarch64.tar.gz > wzcc-macos-aarch64.tar.gz.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wzcc-macos-aarch64.tar.gz
+          path: dist/wzcc-macos-aarch64.tar.gz
+
+      - name: Upload checksum
+        uses: actions/upload-artifact@v4
+        with:
+          name: wzcc-macos-aarch64.tar.gz.sha256
+          path: dist/wzcc-macos-aarch64.tar.gz.sha256
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+          draft: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
