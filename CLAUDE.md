@@ -62,6 +62,25 @@ Before committing, verify:
 - Run all tests: `cargo test` or `make test`
 - Tests located alongside source in same module or in tests/ directory
 
+## Issue Tracking (Beads)
+
+This project uses `bd` (beads) for issue tracking. See @AGENTS.md for session completion workflow.
+
+```bash
+bd ready                          # Find available work (unblocked tasks)
+bd show <id>                      # View issue details
+bd create "Title" -p 1            # Create a new task
+bd update <id> --claim            # Claim a task (assignee + in_progress)
+bd close <id> --reason "..."      # Complete a task
+bd comments add <id> "text"       # Add a comment (prefer over --notes)
+bd sync                           # Sync with git
+```
+
+- Always run `bd ready` before starting work
+- Never use `bd edit` (opens interactive editor)
+- Include issue ID in commit messages: `feat: add feature (wzcc-xxxx)`
+- Run `bd sync` at end of session
+
 ## Project Structure
 
 - `src/ui/` - TUI components and event handling
