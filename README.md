@@ -119,6 +119,7 @@ wzcc tui
 | `i` | Open prompt input (send text to selected session) |
 | `x` | Kill (close) selected session's pane (with confirmation) |
 | `a` | Add new Claude Code session (split selected pane, then choose `r`ight/`d`own/`t`ab) |
+| `H` | Open conversation history list for selected session |
 | `Enter` / Double-click | Switch to selected session (TUI continues) |
 | `c` | Quit TUI |
 | `q` / `Esc` | Quit TUI |
@@ -132,6 +133,29 @@ wzcc tui
 | `Ctrl+O` | Insert newline (multi-line input) |
 | `Esc` | Cancel and exit input mode |
 | `Ctrl+U` | Clear input buffer |
+
+**History List Mode** (press `H` to enter):
+
+| Key | Action |
+|-----|--------|
+| `j` / `↓` | Select next turn |
+| `k` / `↑` | Select previous turn |
+| `Enter` | Open selected turn detail |
+| `g` + `g` | Jump to newest turn |
+| `G` | Jump to oldest turn |
+| `Esc` / `q` / `H` | Exit history mode |
+
+**History Detail Mode** (press `Enter` on a turn in history list):
+
+| Key | Action |
+|-----|--------|
+| `j` / `↓` | Scroll down one line |
+| `k` / `↑` | Scroll up one line |
+| `Ctrl+D` | Scroll down half page |
+| `Ctrl+U` | Scroll up half page |
+| `g` + `g` | Scroll to top |
+| `G` | Scroll to bottom |
+| `Esc` / `q` / `H` | Back to history list |
 
 ## Configuration
 

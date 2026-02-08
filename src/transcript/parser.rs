@@ -318,6 +318,7 @@ pub struct UserTranscriptEntry {
     pub type_: String,
     #[serde(rename = "isMeta")]
     pub is_meta: Option<bool>,
+    pub timestamp: Option<String>,
     pub message: Option<UserMessage>,
 }
 
@@ -437,6 +438,7 @@ pub fn get_last_assistant_text(path: &Path, max_chars: usize) -> Result<Option<S
 pub struct ConversationTurn {
     pub user_prompt: String,
     pub assistant_response: String,
+    pub timestamp: Option<String>,
 }
 
 /// Extract conversation turns from a transcript file.
@@ -448,6 +450,7 @@ pub fn extract_conversation_turns(path: &Path, max_turns: usize) -> Result<Vec<C
 
     let mut turns: Vec<ConversationTurn> = Vec::new();
     let mut current_prompt: Option<String> = None;
+    let mut current_timestamp: Option<String> = None;
     let mut last_assistant_text = String::new();
 
     for line in &lines {
@@ -510,17 +513,15 @@ pub fn extract_conversation_turns(path: &Path, max_turns: usize) -> Result<Vec<C
 
                 // Save previous turn if exists
                 if let Some(prev_prompt) = current_prompt.take() {
-                    const MAX_TURN_CHARS: usize = 5000;
                     turns.push(ConversationTurn {
-                        user_prompt: truncate_with_ellipsis(prev_prompt, MAX_TURN_CHARS),
-                        assistant_response: truncate_with_ellipsis(
-                            std::mem::take(&mut last_assistant_text),
-                            MAX_TURN_CHARS,
-                        ),
+                        user_prompt: prev_prompt,
+                        assistant_response: std::mem::take(&mut last_assistant_text),
+                        timestamp: current_timestamp.take(),
                     });
                 }
 
                 current_prompt = Some(text);
+                current_timestamp = entry.timestamp.clone();
                 last_assistant_text.clear();
             }
             "assistant" => {
@@ -551,10 +552,10 @@ pub fn extract_conversation_turns(path: &Path, max_turns: usize) -> Result<Vec<C
 
     // Handle final turn
     if let Some(prompt) = current_prompt {
-        const MAX_TURN_CHARS: usize = 5000;
         turns.push(ConversationTurn {
-            user_prompt: truncate_with_ellipsis(prompt, MAX_TURN_CHARS),
-            assistant_response: truncate_with_ellipsis(last_assistant_text, MAX_TURN_CHARS),
+            user_prompt: prompt,
+            assistant_response: last_assistant_text,
+            timestamp: current_timestamp,
         });
     }
 
@@ -938,12 +939,12 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_turns_truncates_long_text() {
+    fn test_extract_turns_preserves_long_text() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.jsonl");
-        // Create text exceeding the 5000-char limit
-        let long_prompt = "x".repeat(6000);
-        let long_response = "y".repeat(6000);
+        // Long text should be preserved in full (scrollable in detail view)
+        let long_prompt = "x".repeat(10000);
+        let long_response = "y".repeat(10000);
         let content = format!(
             r#"{{"type":"user","message":{{"content":"{}"}}}}"#,
             long_prompt
@@ -956,10 +957,60 @@ mod tests {
 
         let turns = extract_conversation_turns(&path, 50).unwrap();
         assert_eq!(turns.len(), 1);
-        // 5000 chars + "..." = 5003 chars
-        assert_eq!(turns[0].user_prompt.chars().count(), 5003);
-        assert!(turns[0].user_prompt.ends_with("..."));
-        assert_eq!(turns[0].assistant_response.chars().count(), 5003);
-        assert!(turns[0].assistant_response.ends_with("..."));
+        assert_eq!(turns[0].user_prompt.chars().count(), 10000);
+        assert_eq!(turns[0].assistant_response.chars().count(), 10000);
+    }
+
+    #[test]
+    fn test_extract_turns_with_timestamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.jsonl");
+        let content = [
+            r#"{"type":"user","timestamp":"2026-01-23T16:00:00.000Z","message":{"content":"hello"}}"#,
+            r#"{"type":"assistant","timestamp":"2026-01-23T16:00:05.000Z","message":{"content":[{"type":"text","text":"Hi!"}]}}"#,
+        ]
+        .join("\n");
+        std::fs::write(&path, content).unwrap();
+
+        let turns = extract_conversation_turns(&path, 50).unwrap();
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].user_prompt, "hello");
+        assert_eq!(turns[0].assistant_response, "Hi!");
+        assert_eq!(
+            turns[0].timestamp.as_deref(),
+            Some("2026-01-23T16:00:00.000Z")
+        );
+    }
+
+    #[test]
+    fn test_extract_turns_multi_turn_timestamps_with_max() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.jsonl");
+        // 3 turns: oldest(T1) -> middle(T2) -> newest(T3)
+        let content = [
+            r#"{"type":"user","timestamp":"2026-01-23T10:00:00.000Z","message":{"content":"first"}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"resp1"}]}}"#,
+            r#"{"type":"user","timestamp":"2026-01-23T11:00:00.000Z","message":{"content":"second"}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"resp2"}]}}"#,
+            r#"{"type":"user","timestamp":"2026-01-23T12:00:00.000Z","message":{"content":"third"}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"resp3"}]}}"#,
+        ]
+        .join("\n");
+        std::fs::write(&path, content).unwrap();
+
+        // Request only 2 turns (newest first due to reverse)
+        let turns = extract_conversation_turns(&path, 2).unwrap();
+        assert_eq!(turns.len(), 2);
+        // Newest first
+        assert_eq!(turns[0].user_prompt, "third");
+        assert_eq!(
+            turns[0].timestamp.as_deref(),
+            Some("2026-01-23T12:00:00.000Z")
+        );
+        assert_eq!(turns[1].user_prompt, "second");
+        assert_eq!(
+            turns[1].timestamp.as_deref(),
+            Some("2026-01-23T11:00:00.000Z")
+        );
     }
 }
