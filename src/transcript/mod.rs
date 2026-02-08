@@ -6,9 +6,13 @@
 mod info;
 mod parser;
 mod path;
+pub mod session_info;
 mod state;
+pub mod watcher;
 
 pub use info::{read_transcript_info, TranscriptInfo};
 pub use parser::{get_last_assistant_text, get_last_user_prompt, TranscriptEntry};
 pub use path::{encode_cwd, get_latest_transcript, get_transcript_dir};
+pub use session_info::{detect_session_info, SessionInfo};
 pub use state::{detect_session_status, SessionStatus};
+pub use watcher::TranscriptWatcher;

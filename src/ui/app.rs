@@ -1,9 +1,11 @@
 use crate::cli::{switch_workspace, WeztermCli};
+use crate::datasource::git::GitBranchCache;
 use crate::datasource::{
     PaneDataSource, ProcessDataSource, SystemProcessDataSource, WeztermDataSource,
 };
 use crate::detector::ClaudeCodeDetector;
 use crate::session_mapping::SessionMapping;
+use crate::transcript::TranscriptWatcher;
 use anyhow::Result;
 use crossterm::{
     event::{
@@ -12,7 +14,6 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
@@ -21,8 +22,6 @@ use ratatui::{
 };
 use std::collections::HashMap;
 use std::io;
-use std::path::PathBuf;
-use std::sync::mpsc::{channel, Receiver};
 use std::time::{Duration, Instant};
 
 use super::event::{
@@ -32,38 +31,6 @@ use super::input_buffer::InputBuffer;
 use super::render::{render_details, render_footer, render_list};
 use super::session::ClaudeSession;
 use super::toast::Toast;
-
-/// Cache for git branch lookups with TTL
-struct GitBranchCache {
-    entries: HashMap<String, (Option<String>, Instant)>,
-    ttl: Duration,
-}
-
-impl GitBranchCache {
-    fn new(ttl_secs: u64) -> Self {
-        Self {
-            entries: HashMap::new(),
-            ttl: Duration::from_secs(ttl_secs),
-        }
-    }
-
-    fn get(&mut self, cwd: &str) -> Option<String> {
-        if let Some((branch, fetched_at)) = self.entries.get(cwd) {
-            if fetched_at.elapsed() < self.ttl {
-                return branch.clone();
-            }
-        }
-
-        let branch = ClaudeSession::get_git_branch(cwd);
-        self.entries
-            .insert(cwd.to_string(), (branch.clone(), Instant::now()));
-        branch
-    }
-
-    fn clear(&mut self) {
-        self.entries.clear();
-    }
-}
 
 /// TUI application
 pub struct App {
@@ -90,11 +57,7 @@ pub struct App {
     /// List area Rect (for click position calculation)
     list_area: Option<Rect>,
     /// File watcher for transcript changes
-    _watcher: Option<RecommendedWatcher>,
-    /// Receiver for file change events
-    file_change_rx: Option<Receiver<PathBuf>>,
-    /// Currently watched directories
-    watched_dirs: Vec<PathBuf>,
+    transcript_watcher: Option<TranscriptWatcher>,
     /// Animation frame counter for Processing status indicator (0-3)
     animation_frame: u8,
     /// Current workspace name (for detecting cross-workspace jumps)
@@ -139,9 +102,7 @@ impl App {
             prev_last_outputs: Vec::new(),
             last_click: None,
             list_area: None,
-            _watcher: None,
-            file_change_rx: None,
-            watched_dirs: Vec::new(),
+            transcript_watcher: None,
             animation_frame: 0,
             current_workspace: String::new(),
             details_width_percent: 45,
@@ -152,32 +113,6 @@ impl App {
             last_transcript_refresh: Instant::now(),
             pending_transcript_refresh: false,
         }
-    }
-
-    /// Setup file watcher for transcript directories
-    fn setup_watcher(&mut self) -> Result<()> {
-        let (tx, rx) = channel::<PathBuf>();
-
-        let watcher = RecommendedWatcher::new(
-            move |res: Result<notify::Event, notify::Error>| {
-                if let Ok(event) = res {
-                    // Only handle modify events for .jsonl files
-                    if event.kind.is_modify() {
-                        for path in event.paths {
-                            if path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
-                                let _ = tx.send(path);
-                            }
-                        }
-                    }
-                }
-            },
-            Config::default(),
-        )?;
-
-        self.file_change_rx = Some(rx);
-        self._watcher = Some(watcher);
-
-        Ok(())
     }
 
     /// Clean up session mapping files for TTYs that no longer exist.
@@ -196,53 +131,26 @@ impl App {
         SessionMapping::cleanup_inactive_ttys(&active_ttys);
     }
 
-    /// Update watched directories based on current sessions
+    /// Update watched directories based on current sessions.
     fn update_watched_dirs(&mut self) -> Result<()> {
-        use crate::transcript::get_transcript_dir;
+        let cwds: Vec<String> = self
+            .sessions
+            .iter()
+            .filter_map(|s| s.pane.cwd_path())
+            .collect();
 
-        let mut new_dirs: Vec<PathBuf> = Vec::new();
-
-        for session in &self.sessions {
-            if let Some(cwd) = session.pane.cwd_path() {
-                if let Some(dir) = get_transcript_dir(&cwd) {
-                    if dir.exists() && !new_dirs.contains(&dir) {
-                        new_dirs.push(dir);
-                    }
-                }
-            }
+        if let Some(watcher) = &mut self.transcript_watcher {
+            watcher.update_dirs(&cwds)?;
         }
-
-        // Get reference to watcher
-        if let Some(watcher) = &mut self._watcher {
-            // Unwatch old dirs
-            for dir in &self.watched_dirs {
-                if !new_dirs.contains(dir) {
-                    let _ = watcher.unwatch(dir);
-                }
-            }
-
-            // Watch new dirs
-            for dir in &new_dirs {
-                if !self.watched_dirs.contains(dir) {
-                    let _ = watcher.watch(dir, RecursiveMode::NonRecursive);
-                }
-            }
-        }
-
-        self.watched_dirs = new_dirs;
 
         Ok(())
     }
 
-    /// Drain file change events and return true if any were received
+    /// Drain file change events and return true if any were received.
     fn drain_file_changes(&self) -> bool {
-        let mut had_changes = false;
-        if let Some(rx) = &self.file_change_rx {
-            while rx.try_recv().is_ok() {
-                had_changes = true;
-            }
-        }
-        had_changes
+        self.transcript_watcher
+            .as_ref()
+            .is_some_and(|w| w.drain_changes())
     }
 
     /// Extract current workspace from pane list (avoids redundant wezterm CLI call)
@@ -264,7 +172,7 @@ impl App {
     /// Does NOT call wezterm CLI, ps, or git. Only re-reads transcript files.
     fn refresh_transcripts(&mut self) {
         for session in &mut self.sessions {
-            let info = ClaudeSession::detect_session_info(&session.pane);
+            let info = crate::transcript::detect_session_info(&session.pane);
             session.status = info.status;
             session.last_prompt = info.last_prompt;
             session.last_output = info.last_output;
@@ -320,7 +228,7 @@ impl App {
                     .ok()??;
 
                 // Get session info (uses statusLine bridge if available, falls back to CWD-based)
-                let session_info = ClaudeSession::detect_session_info(&pane);
+                let session_info = crate::transcript::detect_session_info(&pane);
 
                 // Keep only detected sessions (git_branch filled below)
                 Some(ClaudeSession {
@@ -530,7 +438,7 @@ impl App {
         let mut terminal = Terminal::new(backend)?;
 
         // Setup file watcher
-        self.setup_watcher()?;
+        self.transcript_watcher = Some(TranscriptWatcher::new()?);
 
         // Initial refresh
         self.refresh()?;
