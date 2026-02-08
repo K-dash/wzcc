@@ -523,6 +523,7 @@ pub fn render_footer(
     area: Rect,
     input_mode: bool,
     toast: Option<&super::toast::Toast>,
+    kill_confirm: Option<&(u32, String)>,
 ) {
     // Show toast if active (overrides footer)
     if let Some(toast) = toast {
@@ -535,6 +536,30 @@ pub fn render_footer(
             Span::styled(&toast.message, Style::default().fg(color)),
         ]);
         let paragraph = Paragraph::new(toast_text);
+        f.render_widget(paragraph, area);
+        return;
+    }
+
+    // Show kill confirmation prompt if active (overrides normal footer)
+    if let Some((_pane_id, label)) = kill_confirm {
+        let confirm_text = Line::from(vec![
+            Span::styled("Kill ", Style::default().fg(Color::Red)),
+            Span::styled(
+                label.as_str(),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("? ", Style::default().fg(Color::Red)),
+            Span::styled(
+                "[y]",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("es / "),
+            Span::styled("[any]", Style::default().fg(Color::Cyan)),
+            Span::raw("cancel"),
+        ]);
+        let paragraph = Paragraph::new(confirm_text);
         f.render_widget(paragraph, area);
         return;
     }
@@ -566,6 +591,8 @@ pub fn render_footer(
             Span::raw("Resize "),
             Span::styled("[r]", Style::default().fg(Color::Cyan)),
             Span::raw("Refresh "),
+            Span::styled("[x]", Style::default().fg(Color::Cyan)),
+            Span::raw("Kill "),
             Span::styled("[q]", Style::default().fg(Color::Cyan)),
             Span::raw("Quit"),
         ])

@@ -70,6 +70,8 @@ pub struct App {
     input_buffer: InputBuffer,
     /// Toast notification
     toast: Option<Toast>,
+    /// Kill confirmation mode (stores pane_id and display label)
+    kill_confirm: Option<(u32, String)>,
     /// Git branch cache (30s TTL)
     git_branch_cache: GitBranchCache,
     /// Last time a transcript-only refresh was performed (for debouncing)
@@ -109,6 +111,7 @@ impl App {
             input_mode: false,
             input_buffer: InputBuffer::new(),
             toast: None,
+            kill_confirm: None,
             git_branch_cache: GitBranchCache::new(30),
             last_transcript_refresh: Instant::now(),
             pending_transcript_refresh: false,
@@ -424,6 +427,60 @@ impl App {
         Ok(())
     }
 
+    /// Check if the given pane_id is the pane running wzcc itself
+    fn is_self_pane(pane_id: u32) -> bool {
+        std::env::var("WEZTERM_PANE")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .is_some_and(|id| id == pane_id)
+    }
+
+    /// Enter kill confirmation mode for the selected session
+    fn request_kill_selected(&mut self) {
+        if let Some(i) = self.list_state.selected() {
+            if let Some(session) = self.sessions.get(i) {
+                let pane_id = session.pane.pane_id;
+
+                if Self::is_self_pane(pane_id) {
+                    self.toast = Some(Toast::error(
+                        "Cannot kill the pane running wzcc".to_string(),
+                    ));
+                    self.dirty = true;
+                    return;
+                }
+
+                let label = format!("Pane {}", pane_id,);
+                self.kill_confirm = Some((pane_id, label));
+                self.dirty = true;
+            }
+        }
+    }
+
+    /// Execute the kill after confirmation
+    fn confirm_kill(&mut self) -> Result<()> {
+        if let Some((pane_id, _label)) = self.kill_confirm.take() {
+            match WeztermCli::kill_pane(pane_id) {
+                Ok(()) => {
+                    self.toast = Some(Toast::success(format!("Killed Pane {}", pane_id)));
+                    self.refresh()?;
+                    self.update_watched_dirs()?;
+                }
+                Err(e) => {
+                    self.toast = Some(Toast::error(format!("Failed to kill pane: {}", e)));
+                }
+            }
+            self.dirty = true;
+            self.needs_full_redraw = true;
+        }
+        Ok(())
+    }
+
+    /// Cancel the kill confirmation
+    fn cancel_kill(&mut self) {
+        self.kill_confirm = None;
+        self.dirty = true;
+    }
+
     /// Run TUI
     pub fn run(&mut self) -> Result<()> {
         // Clean up stale session mappings for TTYs that no longer exist
@@ -559,6 +616,17 @@ impl App {
                         _ => {}
                     }
                 }
+                Event::Key(key) if self.kill_confirm.is_some() => {
+                    // Kill confirmation mode key handling
+                    match key.code {
+                        KeyCode::Char('y') | KeyCode::Char('Y') => {
+                            self.confirm_kill()?;
+                        }
+                        _ => {
+                            self.cancel_kill();
+                        }
+                    }
+                }
                 Event::Key(key) => {
                     // Normal mode key handling
                     // Handle gg sequence
@@ -604,6 +672,9 @@ impl App {
                     } else if key.code == KeyCode::Char('i') {
                         // Enter input mode
                         self.enter_input_mode();
+                    } else if key.code == KeyCode::Char('x') {
+                        // Request kill for selected session (shows confirmation)
+                        self.request_kill_selected();
                     } else if is_refresh_key(&key) {
                         // Show refreshing indicator then update
                         self.refreshing = true;
@@ -789,7 +860,13 @@ impl App {
         );
 
         // Render footer with keybindings help
-        render_footer(f, footer_area, self.input_mode, self.toast.as_ref());
+        render_footer(
+            f,
+            footer_area,
+            self.input_mode,
+            self.toast.as_ref(),
+            self.kill_confirm.as_ref(),
+        );
     }
 }
 

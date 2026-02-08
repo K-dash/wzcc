@@ -117,6 +117,7 @@ wzcc tui
 | `G` | Jump to last session |
 | `h` / `l` | Resize details panel (h: shrink, l: expand) |
 | `i` | Open prompt input (send text to selected session) |
+| `x` | Kill (close) selected session's pane (with confirmation) |
 | `Enter` / Double-click | Switch to selected session (TUI continues) |
 | `c` | Quit TUI |
 | `q` / `Esc` | Quit TUI |
