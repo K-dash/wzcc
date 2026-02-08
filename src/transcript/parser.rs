@@ -513,13 +513,9 @@ pub fn extract_conversation_turns(path: &Path, max_turns: usize) -> Result<Vec<C
 
                 // Save previous turn if exists
                 if let Some(prev_prompt) = current_prompt.take() {
-                    const MAX_TURN_CHARS: usize = 5000;
                     turns.push(ConversationTurn {
-                        user_prompt: truncate_with_ellipsis(prev_prompt, MAX_TURN_CHARS),
-                        assistant_response: truncate_with_ellipsis(
-                            std::mem::take(&mut last_assistant_text),
-                            MAX_TURN_CHARS,
-                        ),
+                        user_prompt: prev_prompt,
+                        assistant_response: std::mem::take(&mut last_assistant_text),
                         timestamp: current_timestamp.take(),
                     });
                 }
@@ -556,10 +552,9 @@ pub fn extract_conversation_turns(path: &Path, max_turns: usize) -> Result<Vec<C
 
     // Handle final turn
     if let Some(prompt) = current_prompt {
-        const MAX_TURN_CHARS: usize = 5000;
         turns.push(ConversationTurn {
-            user_prompt: truncate_with_ellipsis(prompt, MAX_TURN_CHARS),
-            assistant_response: truncate_with_ellipsis(last_assistant_text, MAX_TURN_CHARS),
+            user_prompt: prompt,
+            assistant_response: last_assistant_text,
             timestamp: current_timestamp,
         });
     }
@@ -944,12 +939,12 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_turns_truncates_long_text() {
+    fn test_extract_turns_preserves_long_text() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.jsonl");
-        // Create text exceeding the 5000-char limit
-        let long_prompt = "x".repeat(6000);
-        let long_response = "y".repeat(6000);
+        // Long text should be preserved in full (scrollable in detail view)
+        let long_prompt = "x".repeat(10000);
+        let long_response = "y".repeat(10000);
         let content = format!(
             r#"{{"type":"user","message":{{"content":"{}"}}}}"#,
             long_prompt
@@ -962,11 +957,8 @@ mod tests {
 
         let turns = extract_conversation_turns(&path, 50).unwrap();
         assert_eq!(turns.len(), 1);
-        // 5000 chars + "..." = 5003 chars
-        assert_eq!(turns[0].user_prompt.chars().count(), 5003);
-        assert!(turns[0].user_prompt.ends_with("..."));
-        assert_eq!(turns[0].assistant_response.chars().count(), 5003);
-        assert!(turns[0].assistant_response.ends_with("..."));
+        assert_eq!(turns[0].user_prompt.chars().count(), 10000);
+        assert_eq!(turns[0].assistant_response.chars().count(), 10000);
     }
 
     #[test]
