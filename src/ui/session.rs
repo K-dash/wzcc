@@ -2,8 +2,7 @@ use crate::detector::DetectionReason;
 use crate::models::Pane;
 use crate::session_mapping::{MappingResult, SessionMapping};
 use crate::transcript::{
-    detect_session_status, get_last_assistant_text, get_last_user_prompt, get_latest_transcript,
-    get_transcript_dir, SessionStatus,
+    get_latest_transcript, get_transcript_dir, read_transcript_info, SessionStatus, TranscriptInfo,
 };
 use ratatui::{
     style::{Color, Style},
@@ -119,27 +118,18 @@ impl ClaudeSession {
                     // We have a valid mapping - use the transcript path from it
                     let transcript_path = mapping.transcript_path.clone();
 
-                    let (status, updated_at) = if transcript_path.exists() {
-                        let status = detect_session_status(&transcript_path)
-                            .unwrap_or(SessionStatus::Unknown);
+                    let (status, last_prompt, last_output, updated_at) = if transcript_path.exists()
+                    {
+                        let info =
+                            read_transcript_info(&transcript_path).unwrap_or(TranscriptInfo {
+                                status: SessionStatus::Unknown,
+                                last_prompt: None,
+                                last_output: None,
+                            });
                         let mtime = Self::get_file_mtime(&transcript_path);
-                        (status, mtime)
+                        (info.status, info.last_prompt, info.last_output, mtime)
                     } else {
-                        (SessionStatus::Ready, None)
-                    };
-
-                    let last_prompt = if transcript_path.exists() {
-                        get_last_user_prompt(&transcript_path, 200).ok().flatten()
-                    } else {
-                        None
-                    };
-
-                    let last_output = if transcript_path.exists() {
-                        get_last_assistant_text(&transcript_path, 1000)
-                            .ok()
-                            .flatten()
-                    } else {
-                        None
+                        (SessionStatus::Ready, None, None, None)
                     };
 
                     return SessionInfo {
@@ -217,18 +207,14 @@ impl ClaudeSession {
             _ => return (SessionStatus::Ready, None, None, None),
         };
 
-        let status = detect_session_status(&transcript_path).unwrap_or(SessionStatus::Unknown);
+        let info = read_transcript_info(&transcript_path).unwrap_or(TranscriptInfo {
+            status: SessionStatus::Unknown,
+            last_prompt: None,
+            last_output: None,
+        });
         let updated_at = Self::get_file_mtime(&transcript_path);
 
-        // Get last user prompt (max 200 chars)
-        let last_prompt = get_last_user_prompt(&transcript_path, 200).ok().flatten();
-
-        // Get last assistant text (max 1000 chars)
-        let last_output = get_last_assistant_text(&transcript_path, 1000)
-            .ok()
-            .flatten();
-
-        (status, last_prompt, last_output, updated_at)
+        (info.status, info.last_prompt, info.last_output, updated_at)
     }
 
     /// Get git branch from cwd

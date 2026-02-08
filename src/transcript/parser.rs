@@ -248,6 +248,52 @@ pub fn read_last_entries(path: &Path, count: usize) -> Result<Vec<TranscriptEntr
     Ok(entries)
 }
 
+/// Pre-read raw lines from a transcript file, shared across multiple
+/// extraction functions without re-reading the file.
+pub struct TranscriptSnapshot {
+    lines: Vec<String>,
+}
+
+impl TranscriptSnapshot {
+    /// Read the tail of a transcript file once.
+    /// Uses seek_multiplier=30 to cover the needs of all consumers
+    /// (status detection uses 20, prompt/assistant extraction use 30).
+    pub fn from_path(path: &Path) -> Result<Self> {
+        let lines = read_lines_from_end(path, 30)?;
+        Ok(Self { lines })
+    }
+
+    /// Return true if no lines were read (empty file).
+    pub fn is_empty(&self) -> bool {
+        self.lines.is_empty()
+    }
+
+    /// Parse the last `count` lines as TranscriptEntry (chronological order).
+    /// Same logic as `read_last_entries`, but from in-memory lines.
+    pub fn last_entries(&self, count: usize) -> Vec<TranscriptEntry> {
+        if self.lines.is_empty() {
+            return Vec::new();
+        }
+
+        let mut entries: Vec<TranscriptEntry> = self
+            .lines
+            .iter()
+            .rev()
+            .take(count)
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+
+        entries.reverse();
+        entries
+    }
+
+    /// Access raw lines for extraction that needs different deserialization
+    /// (e.g., UserTranscriptEntry for user prompt extraction).
+    pub fn raw_lines(&self) -> &[String] {
+        &self.lines
+    }
+}
+
 /// A user message structure (content can be string or array).
 #[derive(Debug, Clone, Deserialize)]
 pub struct UserMessage {
@@ -275,17 +321,15 @@ pub struct UserTranscriptEntry {
     pub message: Option<UserMessage>,
 }
 
-/// Get the last user prompt from a transcript file.
-/// Returns the text content (up to max_chars) from the most recent user message.
-pub fn get_last_user_prompt(path: &Path, max_chars: usize) -> Result<Option<String>> {
-    let lines = read_lines_from_end(path, 30)?;
-
-    if lines.is_empty() {
-        return Ok(None);
+/// Extract the last user prompt from pre-read lines.
+/// Same logic as `get_last_user_prompt`, but operates on in-memory snapshot data.
+pub fn extract_last_user_prompt(snapshot: &TranscriptSnapshot, max_chars: usize) -> Option<String> {
+    if snapshot.is_empty() {
+        return None;
     }
 
     // Search from the end for a user message with text content (not tool_result, not isMeta)
-    for line in lines.iter().rev().take(200) {
+    for line in snapshot.raw_lines().iter().rev().take(200) {
         let entry: UserTranscriptEntry = match serde_json::from_str(line) {
             Ok(e) => e,
             Err(_) => continue,
@@ -332,17 +376,27 @@ pub fn get_last_user_prompt(path: &Path, max_chars: usize) -> Result<Option<Stri
         };
 
         if !text.is_empty() {
-            return Ok(Some(truncate_with_ellipsis(text, max_chars)));
+            return Some(truncate_with_ellipsis(text, max_chars));
         }
     }
 
-    Ok(None)
+    None
 }
 
-/// Get the last assistant text output from a transcript file.
-/// Returns the text content (up to max_chars) from the most recent assistant message.
-pub fn get_last_assistant_text(path: &Path, max_chars: usize) -> Result<Option<String>> {
-    let entries = read_last_entries(path, 20)?;
+/// Get the last user prompt from a transcript file.
+/// Returns the text content (up to max_chars) from the most recent user message.
+pub fn get_last_user_prompt(path: &Path, max_chars: usize) -> Result<Option<String>> {
+    let snapshot = TranscriptSnapshot::from_path(path)?;
+    Ok(extract_last_user_prompt(&snapshot, max_chars))
+}
+
+/// Extract the last assistant text from pre-read entries.
+/// Same logic as `get_last_assistant_text`, but operates on in-memory snapshot data.
+pub fn extract_last_assistant_text(
+    snapshot: &TranscriptSnapshot,
+    max_chars: usize,
+) -> Option<String> {
+    let entries = snapshot.last_entries(20);
 
     // Search from the end for an assistant message with text content
     for entry in entries.iter().rev() {
@@ -364,11 +418,18 @@ pub fn get_last_assistant_text(path: &Path, max_chars: usize) -> Result<Option<S
             .join("\n");
 
         if !text.is_empty() {
-            return Ok(Some(truncate_with_ellipsis(text, max_chars)));
+            return Some(truncate_with_ellipsis(text, max_chars));
         }
     }
 
-    Ok(None)
+    None
+}
+
+/// Get the last assistant text output from a transcript file.
+/// Returns the text content (up to max_chars) from the most recent assistant message.
+pub fn get_last_assistant_text(path: &Path, max_chars: usize) -> Result<Option<String>> {
+    let snapshot = TranscriptSnapshot::from_path(path)?;
+    Ok(extract_last_assistant_text(&snapshot, max_chars))
 }
 
 #[cfg(test)]
