@@ -589,6 +589,12 @@ fn render_history_details(
         lines.extend(response_lines);
     }
 
+    // Clamp scroll offset to prevent overscroll beyond content
+    let content_height = lines.len() as u16;
+    let viewport_height = area.height.saturating_sub(2); // minus borders
+    let max_scroll = content_height.saturating_sub(viewport_height);
+    let clamped_offset = scroll_offset.min(max_scroll);
+
     let title = format!(" History ({}/{}) ", turn_num, total);
     let paragraph = Paragraph::new(lines)
         .block(
@@ -598,7 +604,7 @@ fn render_history_details(
                 .border_style(Style::default().fg(Color::Yellow)),
         )
         .wrap(Wrap { trim: false })
-        .scroll((scroll_offset, 0));
+        .scroll((clamped_offset, 0));
 
     f.render_widget(paragraph, area);
 }

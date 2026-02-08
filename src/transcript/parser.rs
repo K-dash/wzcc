@@ -510,9 +510,13 @@ pub fn extract_conversation_turns(path: &Path, max_turns: usize) -> Result<Vec<C
 
                 // Save previous turn if exists
                 if let Some(prev_prompt) = current_prompt.take() {
+                    const MAX_TURN_CHARS: usize = 5000;
                     turns.push(ConversationTurn {
-                        user_prompt: prev_prompt,
-                        assistant_response: std::mem::take(&mut last_assistant_text),
+                        user_prompt: truncate_with_ellipsis(prev_prompt, MAX_TURN_CHARS),
+                        assistant_response: truncate_with_ellipsis(
+                            std::mem::take(&mut last_assistant_text),
+                            MAX_TURN_CHARS,
+                        ),
                     });
                 }
 
@@ -547,9 +551,10 @@ pub fn extract_conversation_turns(path: &Path, max_turns: usize) -> Result<Vec<C
 
     // Handle final turn
     if let Some(prompt) = current_prompt {
+        const MAX_TURN_CHARS: usize = 5000;
         turns.push(ConversationTurn {
-            user_prompt: prompt,
-            assistant_response: last_assistant_text,
+            user_prompt: truncate_with_ellipsis(prompt, MAX_TURN_CHARS),
+            assistant_response: truncate_with_ellipsis(last_assistant_text, MAX_TURN_CHARS),
         });
     }
 

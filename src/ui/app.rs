@@ -596,6 +596,7 @@ impl App {
         self.history_turns.clear();
         self.history_index = 0;
         self.history_scroll_offset = 0;
+        self.pending_g = false;
         self.dirty = true;
         self.needs_full_redraw = true;
     }
@@ -788,19 +789,23 @@ impl App {
                             self.exit_history_mode();
                         }
                         KeyCode::Char('j') | KeyCode::Down => {
+                            self.pending_g = false;
                             self.history_older();
                         }
                         KeyCode::Char('k') | KeyCode::Up => {
+                            self.pending_g = false;
                             self.history_newer();
                         }
                         KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             // Ctrl+D -> scroll down half page within turn
+                            self.pending_g = false;
                             self.history_scroll_offset =
                                 self.history_scroll_offset.saturating_add(10);
                             self.dirty = true;
                         }
                         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             // Ctrl+U -> scroll up half page within turn
+                            self.pending_g = false;
                             self.history_scroll_offset =
                                 self.history_scroll_offset.saturating_sub(10);
                             self.dirty = true;
