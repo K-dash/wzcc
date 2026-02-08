@@ -19,9 +19,11 @@ use ratatui::{
     widgets::ListState,
     Terminal,
 };
+use std::collections::HashMap;
 use std::io;
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver};
+use std::time::{Duration, Instant};
 
 use super::event::{
     is_down_key, is_enter_key, is_quit_key, is_refresh_key, is_up_key, Event, EventHandler,
@@ -29,6 +31,38 @@ use super::event::{
 use super::render::{render_details, render_footer, render_list};
 use super::session::ClaudeSession;
 use super::toast::Toast;
+
+/// Cache for git branch lookups with TTL
+struct GitBranchCache {
+    entries: HashMap<String, (Option<String>, Instant)>,
+    ttl: Duration,
+}
+
+impl GitBranchCache {
+    fn new(ttl_secs: u64) -> Self {
+        Self {
+            entries: HashMap::new(),
+            ttl: Duration::from_secs(ttl_secs),
+        }
+    }
+
+    fn get(&mut self, cwd: &str) -> Option<String> {
+        if let Some((branch, fetched_at)) = self.entries.get(cwd) {
+            if fetched_at.elapsed() < self.ttl {
+                return branch.clone();
+            }
+        }
+
+        let branch = ClaudeSession::get_git_branch(cwd);
+        self.entries
+            .insert(cwd.to_string(), (branch.clone(), Instant::now()));
+        branch
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+    }
+}
 
 /// TUI application
 pub struct App {
@@ -74,6 +108,12 @@ pub struct App {
     cursor_position: usize,
     /// Toast notification
     toast: Option<Toast>,
+    /// Git branch cache (30s TTL)
+    git_branch_cache: GitBranchCache,
+    /// Last time a transcript-only refresh was performed (for debouncing)
+    last_transcript_refresh: Instant,
+    /// Whether a transcript refresh is pending (trailing-edge debounce)
+    pending_transcript_refresh: bool,
 }
 
 impl Default for App {
@@ -110,6 +150,9 @@ impl App {
             input_buffer: String::new(),
             cursor_position: 0,
             toast: None,
+            git_branch_cache: GitBranchCache::new(30),
+            last_transcript_refresh: Instant::now(),
+            pending_transcript_refresh: false,
         }
     }
 
@@ -204,6 +247,74 @@ impl App {
         had_changes
     }
 
+    /// Extract current workspace from pane list (avoids redundant wezterm CLI call)
+    fn extract_current_workspace(panes: &[crate::models::Pane]) -> Option<String> {
+        let current_pane_id = std::env::var("WEZTERM_PANE").ok()?.parse::<u32>().ok()?;
+        panes
+            .iter()
+            .find(|p| p.pane_id == current_pane_id)
+            .map(|p| p.workspace.clone())
+    }
+
+    /// Apply duplicate CWD guard: clear last_prompt/last_output for sessions
+    /// that share the same CWD without statusLine bridge mapping.
+    fn apply_duplicate_cwd_guard(&mut self) {
+        // Count sessions per cwd (only those without mapping AND without warning)
+        let mut cwd_counts: HashMap<String, usize> = HashMap::new();
+        for session in &self.sessions {
+            if session.session_id.is_none() && session.warning.is_none() {
+                if let Some(cwd) = session.pane.cwd_path() {
+                    *cwd_counts.entry(cwd).or_insert(0) += 1;
+                }
+            }
+        }
+
+        // Clear last_prompt/last_output for sessions with duplicate cwd (without mapping)
+        for session in &mut self.sessions {
+            if session.session_id.is_some() || session.warning.is_some() {
+                continue;
+            }
+            if let Some(cwd) = session.pane.cwd_path() {
+                if cwd_counts.get(&cwd).copied().unwrap_or(0) > 1 {
+                    session.last_prompt = None;
+                    session.last_output =
+                        Some("Run `wzcc install-bridge` for multi-session support".to_string());
+                }
+            }
+        }
+    }
+
+    /// Lightweight refresh: only re-read transcript data for known sessions.
+    /// Does NOT call wezterm CLI, ps, or git. Only re-reads transcript files.
+    fn refresh_transcripts(&mut self) {
+        for session in &mut self.sessions {
+            let info = ClaudeSession::detect_session_info(&session.pane);
+            session.status = info.status;
+            session.last_prompt = info.last_prompt;
+            session.last_output = info.last_output;
+            session.updated_at = info.updated_at;
+            session.warning = info.warning;
+            session.session_id = info.session_id;
+            session.transcript_path = info.transcript_path;
+        }
+        self.apply_duplicate_cwd_guard();
+        self.dirty = true;
+    }
+
+    /// Check if enough time has passed for a debounced transcript refresh.
+    /// Uses trailing-edge debounce: if not enough time passed, sets pending flag.
+    fn should_refresh_transcripts(&mut self) -> bool {
+        let debounce = Duration::from_millis(500);
+        if self.last_transcript_refresh.elapsed() >= debounce {
+            self.pending_transcript_refresh = false;
+            self.last_transcript_refresh = Instant::now();
+            true
+        } else {
+            self.pending_transcript_refresh = true;
+            false
+        }
+    }
+
     /// Refresh session list
     pub fn refresh(&mut self) -> Result<()> {
         // Preserve currently selected pane_id
@@ -213,10 +324,12 @@ impl App {
             .and_then(|i| self.sessions.get(i))
             .map(|s| s.pane.pane_id);
 
-        // Get current workspace (for cross-workspace jump detection)
-        self.current_workspace = self.pane_ds.get_current_workspace()?;
-
+        // Get all panes (single call, also used to extract workspace)
         let panes = self.pane_ds.list_panes()?;
+
+        // Extract workspace from pane list (avoids redundant wezterm CLI call)
+        self.current_workspace = Self::extract_current_workspace(&panes)
+            .unwrap_or_else(|| self.current_workspace.clone());
 
         // Build process tree once (optimization)
         let process_tree = self.process_ds.build_tree()?;
@@ -233,18 +346,13 @@ impl App {
                 // Get session info (uses statusLine bridge if available, falls back to CWD-based)
                 let session_info = ClaudeSession::detect_session_info(&pane);
 
-                // Get git branch
-                let git_branch = pane
-                    .cwd_path()
-                    .and_then(|cwd| ClaudeSession::get_git_branch(&cwd));
-
-                // Keep only detected sessions
+                // Keep only detected sessions (git_branch filled below)
                 Some(ClaudeSession {
                     pane,
                     detected: true,
                     reason,
                     status: session_info.status,
-                    git_branch,
+                    git_branch: None,
                     last_prompt: session_info.last_prompt,
                     last_output: session_info.last_output,
                     session_id: session_info.session_id,
@@ -255,42 +363,15 @@ impl App {
             })
             .collect();
 
-        // Cannot show last_output when multiple sessions share the same cwd
-        // BUT only if they don't have statusLine bridge mapping (has_mapping = false)
-        // Count sessions per cwd (only those without mapping AND without warning)
-        // Sessions with warning are stale bridge sessions - bridge is installed but not updating
-        let mut cwd_counts: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
-        for session in &self.sessions {
-            // Only count sessions that have no mapping AND no warning (i.e., bridge not installed)
-            // Stale sessions (warning set) already have appropriate messaging
-            if session.session_id.is_none() && session.warning.is_none() {
-                if let Some(cwd) = session.pane.cwd_path() {
-                    *cwd_counts.entry(cwd).or_insert(0) += 1;
-                }
-            }
-        }
-
-        // Clear last_prompt/last_output for sessions with duplicate cwd (without mapping)
+        // Fill in git branches with caching (separate loop to avoid borrow issues)
         for session in &mut self.sessions {
-            // Skip sessions that have statusLine mapping - they are already accurate
-            if session.session_id.is_some() {
-                continue;
-            }
-
-            // Skip sessions with warning (stale bridge) - they already show appropriate message
-            if session.warning.is_some() {
-                continue;
-            }
-
             if let Some(cwd) = session.pane.cwd_path() {
-                if cwd_counts.get(&cwd).copied().unwrap_or(0) > 1 {
-                    session.last_prompt = None;
-                    session.last_output =
-                        Some("Run `wzcc install-bridge` for multi-session support".to_string());
-                }
+                session.git_branch = self.git_branch_cache.get(&cwd);
             }
         }
+
+        // Apply duplicate CWD guard
+        self.apply_duplicate_cwd_guard();
 
         // Sort by workspace → cwd → pane_id
         // Current workspace comes first
@@ -658,10 +739,9 @@ impl App {
 
         // Main loop
         let result = loop {
-            // Check for file changes from notify
-            if self.drain_file_changes() {
-                // File changed - refresh status only (not full session list)
-                self.refresh()?;
+            // Check for file changes from notify (lightweight transcript-only refresh)
+            if self.drain_file_changes() && self.should_refresh_transcripts() {
+                self.refresh_transcripts();
 
                 // Check for actual changes in output
                 let current_outputs: Vec<Option<String>> = self
@@ -809,6 +889,7 @@ impl App {
                         self.refreshing = true;
                         self.dirty = true;
                         terminal.draw(|f| self.render(f))?;
+                        self.git_branch_cache.clear();
                         self.refresh()?;
                         self.refreshing = false;
                     } else if let KeyCode::Char(c) = key.code {
@@ -887,6 +968,25 @@ impl App {
                         .any(|s| matches!(s.status, crate::transcript::SessionStatus::Processing));
                     if has_processing {
                         self.dirty = true;
+                    }
+
+                    // Flush pending transcript refresh (trailing-edge debounce)
+                    if self.pending_transcript_refresh
+                        && self.last_transcript_refresh.elapsed() >= Duration::from_millis(500)
+                    {
+                        self.refresh_transcripts();
+                        self.pending_transcript_refresh = false;
+                        self.last_transcript_refresh = Instant::now();
+
+                        let current_outputs: Vec<Option<String>> = self
+                            .sessions
+                            .iter()
+                            .map(|s| s.last_output.clone())
+                            .collect();
+                        if current_outputs != self.prev_last_outputs {
+                            self.needs_full_redraw = true;
+                            self.prev_last_outputs = current_outputs;
+                        }
                     }
 
                     // Periodic full refresh for new session detection (every 5 seconds)
