@@ -254,10 +254,11 @@ pub fn render_details(
     history_mode: bool,
     history_turns: &[ConversationTurn],
     history_index: usize,
+    history_scroll_offset: u16,
 ) {
     // History browsing mode: render history view instead of normal details
     if history_mode && !history_turns.is_empty() {
-        render_history_details(f, area, history_turns, history_index);
+        render_history_details(f, area, history_turns, history_index, history_scroll_offset);
         return;
     }
 
@@ -535,11 +536,15 @@ fn render_history_details(
     area: Rect,
     turns: &[ConversationTurn],
     index: usize,
+    scroll_offset: u16,
 ) {
     let turn = &turns[index];
     let total = turns.len();
     let turn_num = total - index; // Display as 1-based chronological number
     let inner_width = (area.width.saturating_sub(2)) as usize;
+
+    // No max_lines limit - content is scrollable via Ctrl+D/Ctrl+U
+    let max_lines = usize::MAX;
 
     let mut lines: Vec<Line<'static>> = Vec::new();
 
@@ -551,13 +556,7 @@ fn render_history_details(
             .fg(Color::Cyan),
     )]));
 
-    let prompt_max_lines = (area.height as usize).saturating_sub(8) / 3;
-    let prompt_lines = wrap_text_lines(
-        &turn.user_prompt,
-        inner_width,
-        prompt_max_lines.max(3),
-        Color::White,
-    );
+    let prompt_lines = wrap_text_lines(&turn.user_prompt, inner_width, max_lines, Color::White);
     lines.extend(prompt_lines);
 
     // Separator
@@ -581,11 +580,10 @@ fn render_history_details(
             Style::default().fg(Color::DarkGray),
         )));
     } else {
-        let response_max_lines = (area.height as usize).saturating_sub(lines.len() + 3);
         let response_lines = wrap_text_lines(
             &turn.assistant_response,
             inner_width,
-            response_max_lines.max(3),
+            max_lines,
             Color::Gray,
         );
         lines.extend(response_lines);
@@ -599,7 +597,8 @@ fn render_history_details(
                 .title(title)
                 .border_style(Style::default().fg(Color::Yellow)),
         )
-        .wrap(Wrap { trim: false });
+        .wrap(Wrap { trim: false })
+        .scroll((scroll_offset, 0));
 
     f.render_widget(paragraph, area);
 }
@@ -688,8 +687,10 @@ pub fn render_footer(
 
     let help_text = if history_mode {
         Line::from(vec![
-            Span::styled("[↑↓/jk]", Style::default().fg(Color::Yellow)),
-            Span::raw("Browse "),
+            Span::styled("[jk]", Style::default().fg(Color::Yellow)),
+            Span::raw("Turn "),
+            Span::styled("[^D/^U]", Style::default().fg(Color::Yellow)),
+            Span::raw("Scroll "),
             Span::styled("[gg]", Style::default().fg(Color::Yellow)),
             Span::raw("Newest "),
             Span::styled("[G]", Style::default().fg(Color::Yellow)),

@@ -81,6 +81,8 @@ pub struct App {
     history_turns: Vec<ConversationTurn>,
     /// Current history index (0 = newest)
     history_index: usize,
+    /// Scroll offset within the current history turn (line-level)
+    history_scroll_offset: u16,
     /// User configuration loaded from ~/.config/wzcc/config.toml
     config: Config,
     /// Git branch cache (30s TTL)
@@ -134,6 +136,7 @@ impl App {
             history_mode: false,
             history_turns: Vec::new(),
             history_index: 0,
+            history_scroll_offset: 0,
             config,
             git_branch_cache: GitBranchCache::new(30),
             last_transcript_refresh: Instant::now(),
@@ -592,6 +595,7 @@ impl App {
         self.history_mode = false;
         self.history_turns.clear();
         self.history_index = 0;
+        self.history_scroll_offset = 0;
         self.dirty = true;
         self.needs_full_redraw = true;
     }
@@ -600,6 +604,7 @@ impl App {
     fn history_older(&mut self) {
         if self.history_index + 1 < self.history_turns.len() {
             self.history_index += 1;
+            self.history_scroll_offset = 0;
             self.dirty = true;
         }
     }
@@ -608,6 +613,7 @@ impl App {
     fn history_newer(&mut self) {
         if self.history_index > 0 {
             self.history_index -= 1;
+            self.history_scroll_offset = 0;
             self.dirty = true;
         }
     }
@@ -787,10 +793,23 @@ impl App {
                         KeyCode::Char('k') | KeyCode::Up => {
                             self.history_newer();
                         }
+                        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            // Ctrl+D -> scroll down half page within turn
+                            self.history_scroll_offset =
+                                self.history_scroll_offset.saturating_add(10);
+                            self.dirty = true;
+                        }
+                        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            // Ctrl+U -> scroll up half page within turn
+                            self.history_scroll_offset =
+                                self.history_scroll_offset.saturating_sub(10);
+                            self.dirty = true;
+                        }
                         KeyCode::Char('g') => {
                             if self.pending_g {
                                 // gg -> jump to newest
                                 self.history_index = 0;
+                                self.history_scroll_offset = 0;
                                 self.dirty = true;
                                 self.pending_g = false;
                             } else {
@@ -801,6 +820,7 @@ impl App {
                             // G -> jump to oldest
                             if !self.history_turns.is_empty() {
                                 self.history_index = self.history_turns.len() - 1;
+                                self.history_scroll_offset = 0;
                                 self.dirty = true;
                             }
                         }
@@ -1048,6 +1068,7 @@ impl App {
             self.history_mode,
             &self.history_turns,
             self.history_index,
+            self.history_scroll_offset,
         );
 
         // Render footer with keybindings help
