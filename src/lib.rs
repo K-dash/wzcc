@@ -1,4 +1,5 @@
 pub mod cli;
+pub mod config;
 pub mod datasource;
 pub mod detector;
 pub mod models;

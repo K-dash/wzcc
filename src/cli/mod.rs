@@ -122,6 +122,60 @@ impl WeztermCli {
         Ok(())
     }
 
+    /// Split the specified pane and run a program in the new pane.
+    /// Returns the pane_id of the newly created pane.
+    ///
+    /// The command is executed via the user's shell (`$SHELL -ic "..."`) so that
+    /// shell aliases and functions are available. Each argument is shell-quoted
+    /// to prevent injection and preserve arguments containing spaces.
+    ///
+    /// `direction` should be `"--right"` or `"--bottom"`.
+    /// Expected stdout format from `wezterm cli split-pane`: a single integer (e.g., "42\n")
+    pub fn split_pane(
+        pane_id: u32,
+        cwd: &str,
+        prog: &str,
+        args: &[String],
+        direction: &str,
+    ) -> Result<u32> {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+
+        // Build the shell command string with proper quoting.
+        // The first element (prog) is left unquoted to allow alias/function resolution.
+        // Subsequent args are shell-quoted to preserve spaces and prevent injection.
+        let shell_cmd = if args.is_empty() {
+            prog.to_string()
+        } else {
+            let quoted_args: Vec<String> = args.iter().map(|a| shell_quote(a)).collect();
+            format!("{} {}", prog, quoted_args.join(" "))
+        };
+
+        let output = Command::new("wezterm")
+            .args([
+                "cli",
+                "split-pane",
+                "--pane-id",
+                &pane_id.to_string(),
+                direction,
+                "--cwd",
+                cwd,
+                "--",
+                &shell,
+                "-ic",
+                &shell_cmd,
+            ])
+            .output()
+            .context("Failed to execute wezterm cli split-pane")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("wezterm cli split-pane failed: {}", stderr);
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        parse_pane_id(&stdout)
+    }
+
     /// Change tab title for the specified pane
     pub fn set_tab_title(pane_id: u32, title: &str) -> Result<()> {
         let output = Command::new("wezterm")
@@ -148,9 +202,61 @@ impl WeztermCli {
     }
 }
 
+/// Shell-quote a string using POSIX single-quote escaping.
+/// Wraps in single quotes and replaces internal `'` with `'\''`.
+/// e.g. `hello world` → `'hello world'`, `it's` → `'it'\''s'`
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Parse pane-id from wezterm cli spawn stdout output.
+/// Expected format: a single integer, optionally followed by whitespace/newline.
+fn parse_pane_id(stdout: &str) -> Result<u32> {
+    stdout
+        .trim()
+        .parse::<u32>()
+        .context("Failed to parse pane-id from wezterm cli spawn output")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_shell_quote_simple() {
+        assert_eq!(shell_quote("hello"), "'hello'");
+    }
+
+    #[test]
+    fn test_shell_quote_with_spaces() {
+        assert_eq!(shell_quote("a b"), "'a b'");
+    }
+
+    #[test]
+    fn test_shell_quote_with_single_quote() {
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn test_shell_quote_with_special_chars() {
+        assert_eq!(shell_quote("; rm -rf /"), "'; rm -rf /'");
+        assert_eq!(shell_quote("$(whoami)"), "'$(whoami)'");
+    }
+
+    #[test]
+    fn test_parse_pane_id_valid() {
+        assert_eq!(parse_pane_id("42\n").unwrap(), 42);
+        assert_eq!(parse_pane_id("0").unwrap(), 0);
+        assert_eq!(parse_pane_id("  123  \n").unwrap(), 123);
+    }
+
+    #[test]
+    fn test_parse_pane_id_invalid() {
+        assert!(parse_pane_id("").is_err());
+        assert!(parse_pane_id("abc").is_err());
+        assert!(parse_pane_id("-1").is_err());
+        assert!(parse_pane_id("42 extra").is_err());
+    }
 
     #[test]
     #[ignore] // Skip in CI (requires wezterm CLI)

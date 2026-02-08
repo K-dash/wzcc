@@ -1,4 +1,5 @@
 use crate::cli::{switch_workspace, WeztermCli};
+use crate::config::Config;
 use crate::datasource::git::GitBranchCache;
 use crate::datasource::{
     PaneDataSource, ProcessDataSource, SystemProcessDataSource, WeztermDataSource,
@@ -72,6 +73,10 @@ pub struct App {
     toast: Option<Toast>,
     /// Kill confirmation mode (stores pane_id and display label)
     kill_confirm: Option<(u32, String)>,
+    /// Add pane mode: stores (pane_id, cwd) for split direction selection
+    add_pane_pending: Option<(u32, String)>,
+    /// User configuration loaded from ~/.config/wzcc/config.toml
+    config: Config,
     /// Git branch cache (30s TTL)
     git_branch_cache: GitBranchCache,
     /// Last time a transcript-only refresh was performed (for debouncing)
@@ -90,6 +95,13 @@ impl App {
     pub fn new() -> Self {
         let mut list_state = ListState::default();
         list_state.select(Some(0));
+
+        let (config, config_warning) = match Config::load() {
+            Ok(c) => (c, None),
+            Err(e) => (Config::default(), Some(format!("Config warning: {}", e))),
+        };
+
+        let toast = config_warning.map(Toast::error);
 
         Self {
             sessions: Vec::new(),
@@ -110,8 +122,10 @@ impl App {
             details_width_percent: 45,
             input_mode: false,
             input_buffer: InputBuffer::new(),
-            toast: None,
+            toast,
             kill_confirm: None,
+            add_pane_pending: None,
+            config,
             git_branch_cache: GitBranchCache::new(30),
             last_transcript_refresh: Instant::now(),
             pending_transcript_refresh: false,
@@ -481,6 +495,53 @@ impl App {
         self.dirty = true;
     }
 
+    /// Enter add-pane mode: show direction selection prompt
+    fn request_add_pane(&mut self) {
+        if let Some(i) = self.list_state.selected() {
+            if let Some(session) = self.sessions.get(i) {
+                let pane_id = session.pane.pane_id;
+                let cwd = match session.pane.cwd_path() {
+                    Some(c) => c.to_string(),
+                    None => {
+                        self.toast = Some(Toast::error(
+                            "No working directory available for selected session".to_string(),
+                        ));
+                        self.dirty = true;
+                        return;
+                    }
+                };
+                self.add_pane_pending = Some((pane_id, cwd));
+                self.dirty = true;
+            }
+        }
+    }
+
+    /// Execute the split-pane after direction selection
+    fn confirm_add_pane(&mut self, direction: &str) -> Result<()> {
+        if let Some((pane_id, cwd)) = self.add_pane_pending.take() {
+            let (prog, args) = self.config.spawn_program_and_args();
+            match WeztermCli::split_pane(pane_id, &cwd, prog, args, direction) {
+                Ok(new_pane_id) => {
+                    self.toast = Some(Toast::success(format!("Added Pane {}", new_pane_id)));
+                    self.refresh()?;
+                    self.update_watched_dirs()?;
+                }
+                Err(e) => {
+                    self.toast = Some(Toast::error(format!("Failed to add pane: {}", e)));
+                }
+            }
+            self.dirty = true;
+            self.needs_full_redraw = true;
+        }
+        Ok(())
+    }
+
+    /// Cancel the add-pane mode
+    fn cancel_add_pane(&mut self) {
+        self.add_pane_pending = None;
+        self.dirty = true;
+    }
+
     /// Run TUI
     pub fn run(&mut self) -> Result<()> {
         // Clean up stale session mappings for TTYs that no longer exist
@@ -627,6 +688,20 @@ impl App {
                         }
                     }
                 }
+                Event::Key(key) if self.add_pane_pending.is_some() => {
+                    // Add pane direction selection mode
+                    match key.code {
+                        KeyCode::Char('r') | KeyCode::Char('R') => {
+                            self.confirm_add_pane("--right")?;
+                        }
+                        KeyCode::Char('d') | KeyCode::Char('D') => {
+                            self.confirm_add_pane("--bottom")?;
+                        }
+                        _ => {
+                            self.cancel_add_pane();
+                        }
+                    }
+                }
                 Event::Key(key) => {
                     // Normal mode key handling
                     // Handle gg sequence
@@ -675,6 +750,9 @@ impl App {
                     } else if key.code == KeyCode::Char('x') {
                         // Request kill for selected session (shows confirmation)
                         self.request_kill_selected();
+                    } else if key.code == KeyCode::Char('a') {
+                        // Enter add-pane mode (split direction selection)
+                        self.request_add_pane();
                     } else if is_refresh_key(&key) {
                         // Show refreshing indicator then update
                         self.refreshing = true;
@@ -866,6 +944,7 @@ impl App {
             self.input_mode,
             self.toast.as_ref(),
             self.kill_confirm.as_ref(),
+            self.add_pane_pending.as_ref(),
         );
     }
 }

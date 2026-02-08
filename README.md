@@ -118,6 +118,7 @@ wzcc tui
 | `h` / `l` | Resize details panel (h: shrink, l: expand) |
 | `i` | Open prompt input (send text to selected session) |
 | `x` | Kill (close) selected session's pane (with confirmation) |
+| `a` | Add new Claude Code session (split selected pane, then choose `r`ight/`d`own) |
 | `Enter` / Double-click | Switch to selected session (TUI continues) |
 | `c` | Quit TUI |
 | `q` / `Esc` | Quit TUI |
@@ -131,6 +132,26 @@ wzcc tui
 | `Ctrl+O` | Insert newline (multi-line input) |
 | `Esc` | Cancel and exit input mode |
 | `Ctrl+U` | Clear input buffer |
+
+## Configuration
+
+wzcc can be configured via `~/.config/wzcc/config.toml`. All settings are optional and have sensible defaults.
+
+```toml
+# Command to launch when adding a new session (press 'a')
+# Default: ["claude"]
+spawn_command = ["claude"]
+
+# With arguments
+# spawn_command = ["claude", "--dangerously-skip-permissions"]
+
+# Custom wrapper script
+# spawn_command = ["my-claude-wrapper", "--profile", "dev"]
+```
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `spawn_command` | Array of strings | `["claude"]` | Command and arguments to run when spawning a new session |
 
 ## Architecture
 

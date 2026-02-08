@@ -524,6 +524,7 @@ pub fn render_footer(
     input_mode: bool,
     toast: Option<&super::toast::Toast>,
     kill_confirm: Option<&(u32, String)>,
+    add_pane_pending: Option<&(u32, String)>,
 ) {
     // Show toast if active (overrides footer)
     if let Some(toast) = toast {
@@ -564,6 +565,32 @@ pub fn render_footer(
         return;
     }
 
+    // Show add-pane direction selection prompt if active
+    if let Some((_pane_id, _cwd)) = add_pane_pending {
+        let prompt_text = Line::from(vec![
+            Span::styled("Add pane: ", Style::default().fg(Color::Green)),
+            Span::styled(
+                "[r]",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("ight / "),
+            Span::styled(
+                "[d]",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("own / "),
+            Span::styled("[any]", Style::default().fg(Color::Cyan)),
+            Span::raw("cancel"),
+        ]);
+        let paragraph = Paragraph::new(prompt_text);
+        f.render_widget(paragraph, area);
+        return;
+    }
+
     let help_text = if input_mode {
         Line::from(vec![
             Span::styled("[Enter]", Style::default().fg(Color::Cyan)),
@@ -593,6 +620,8 @@ pub fn render_footer(
             Span::raw("Refresh "),
             Span::styled("[x]", Style::default().fg(Color::Cyan)),
             Span::raw("Kill "),
+            Span::styled("[a]", Style::default().fg(Color::Cyan)),
+            Span::raw("Add "),
             Span::styled("[q]", Style::default().fg(Color::Cyan)),
             Span::raw("Quit"),
         ])
