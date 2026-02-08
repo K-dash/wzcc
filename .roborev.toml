@@ -1,0 +1,13 @@
+agent = "codex"
+
+review_guidelines = """
+- Rust 2021 edition compliance
+- Code must pass cargo fmt and clippy -D warnings
+- No security vulnerabilities (OWASP top 10 awareness)
+- No dead code or unnecessary complexity
+- Follow existing project patterns in src/
+"""
+
+[[hooks]]
+event = "review.*"
+type = "beads"
