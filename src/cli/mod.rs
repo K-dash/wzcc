@@ -138,17 +138,7 @@ impl WeztermCli {
         args: &[String],
         direction: &str,
     ) -> Result<u32> {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
-
-        // Build the shell command string with proper quoting.
-        // The first element (prog) is left unquoted to allow alias/function resolution.
-        // Subsequent args are shell-quoted to preserve spaces and prevent injection.
-        let shell_cmd = if args.is_empty() {
-            prog.to_string()
-        } else {
-            let quoted_args: Vec<String> = args.iter().map(|a| shell_quote(a)).collect();
-            format!("{} {}", prog, quoted_args.join(" "))
-        };
+        let (shell, shell_cmd) = build_shell_command(prog, args);
 
         let output = Command::new("wezterm")
             .args([
@@ -170,6 +160,30 @@ impl WeztermCli {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             anyhow::bail!("wezterm cli split-pane failed: {}", stderr);
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        parse_pane_id(&stdout)
+    }
+
+    /// Spawn a new tab with the given working directory and program.
+    /// Returns the pane_id of the newly created pane.
+    ///
+    /// Like `split_pane`, the command is executed via `$SHELL -ic` for alias support.
+    /// Expected stdout format from `wezterm cli spawn`: a single integer (e.g., "42\n")
+    pub fn spawn_tab(cwd: &str, prog: &str, args: &[String]) -> Result<u32> {
+        let (shell, shell_cmd) = build_shell_command(prog, args);
+
+        let output = Command::new("wezterm")
+            .args([
+                "cli", "spawn", "--cwd", cwd, "--", &shell, "-ic", &shell_cmd,
+            ])
+            .output()
+            .context("Failed to execute wezterm cli spawn")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("wezterm cli spawn failed: {}", stderr);
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -200,6 +214,21 @@ impl WeztermCli {
 
         Ok(())
     }
+}
+
+/// Build a shell command string for spawning via `$SHELL -ic "..."`.
+/// Returns (shell_path, shell_command_string).
+/// The first element (prog) is left unquoted to allow alias/function resolution.
+/// Subsequent args are shell-quoted to preserve spaces and prevent injection.
+fn build_shell_command(prog: &str, args: &[String]) -> (String, String) {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    let shell_cmd = if args.is_empty() {
+        prog.to_string()
+    } else {
+        let quoted_args: Vec<String> = args.iter().map(|a| shell_quote(a)).collect();
+        format!("{} {}", prog, quoted_args.join(" "))
+    };
+    (shell, shell_cmd)
 }
 
 /// Shell-quote a string using POSIX single-quote escaping.

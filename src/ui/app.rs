@@ -516,11 +516,17 @@ impl App {
         }
     }
 
-    /// Execute the split-pane after direction selection
-    fn confirm_add_pane(&mut self, direction: &str) -> Result<()> {
+    /// Execute the add-pane action after mode selection.
+    /// `mode` is `"--right"`, `"--bottom"`, or `"--tab"`.
+    fn confirm_add_pane(&mut self, mode: &str) -> Result<()> {
         if let Some((pane_id, cwd)) = self.add_pane_pending.take() {
             let (prog, args) = self.config.spawn_program_and_args();
-            match WeztermCli::split_pane(pane_id, &cwd, prog, args, direction) {
+            let result = if mode == "--tab" {
+                WeztermCli::spawn_tab(&cwd, prog, args)
+            } else {
+                WeztermCli::split_pane(pane_id, &cwd, prog, args, mode)
+            };
+            match result {
                 Ok(new_pane_id) => {
                     self.toast = Some(Toast::success(format!("Added Pane {}", new_pane_id)));
                     self.refresh()?;
@@ -689,13 +695,16 @@ impl App {
                     }
                 }
                 Event::Key(key) if self.add_pane_pending.is_some() => {
-                    // Add pane direction selection mode
+                    // Add pane mode selection: split right, down, or new tab
                     match key.code {
                         KeyCode::Char('r') | KeyCode::Char('R') => {
                             self.confirm_add_pane("--right")?;
                         }
                         KeyCode::Char('d') | KeyCode::Char('D') => {
                             self.confirm_add_pane("--bottom")?;
+                        }
+                        KeyCode::Char('t') | KeyCode::Char('T') => {
+                            self.confirm_add_pane("--tab")?;
                         }
                         _ => {
                             self.cancel_add_pane();

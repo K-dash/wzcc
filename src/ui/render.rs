@@ -583,6 +583,13 @@ pub fn render_footer(
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("own / "),
+            Span::styled(
+                "[t]",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("ab / "),
             Span::styled("[any]", Style::default().fg(Color::Cyan)),
             Span::raw("cancel"),
         ]);

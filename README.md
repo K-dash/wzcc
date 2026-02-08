@@ -118,7 +118,7 @@ wzcc tui
 | `h` / `l` | Resize details panel (h: shrink, l: expand) |
 | `i` | Open prompt input (send text to selected session) |
 | `x` | Kill (close) selected session's pane (with confirmation) |
-| `a` | Add new Claude Code session (split selected pane, then choose `r`ight/`d`own) |
+| `a` | Add new Claude Code session (split selected pane, then choose `r`ight/`d`own/`t`ab) |
 | `Enter` / Double-click | Switch to selected session (TUI continues) |
 | `c` | Quit TUI |
 | `q` / `Esc` | Quit TUI |
