@@ -103,6 +103,25 @@ impl WeztermCli {
         Ok(())
     }
 
+    /// Kill (close) the specified pane
+    pub fn kill_pane(pane_id: u32) -> Result<()> {
+        let output = Command::new("wezterm")
+            .args(["cli", "kill-pane", "--pane-id", &pane_id.to_string()])
+            .output()
+            .context("Failed to execute wezterm cli kill-pane")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!(
+                "wezterm cli kill-pane failed for pane {}: {}",
+                pane_id,
+                stderr
+            );
+        }
+
+        Ok(())
+    }
+
     /// Change tab title for the specified pane
     pub fn set_tab_title(pane_id: u32, title: &str) -> Result<()> {
         let output = Command::new("wezterm")
