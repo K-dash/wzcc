@@ -270,22 +270,45 @@ pub fn render_details(
     history_timestamps: &[Option<SystemTime>],
 ) {
     // History browsing mode dispatch
-    match history_view {
-        HistoryViewMode::List if !history_turns.is_empty() => {
-            render_history_list(
-                f,
-                area,
-                history_turns,
-                history_list_state,
-                history_timestamps,
-            );
-            return;
+    if matches!(
+        history_view,
+        HistoryViewMode::List | HistoryViewMode::Detail
+    ) && !history_turns.is_empty()
+    {
+        // Split area: compact session info header + history content
+        let content_area = if let Some(session) = selected.and_then(|i| sessions.get(i)) {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(2), Constraint::Min(0)])
+                .split(area);
+            render_session_info_header(f, chunks[0], session);
+            chunks[1]
+        } else {
+            area
+        };
+
+        match history_view {
+            HistoryViewMode::List => {
+                render_history_list(
+                    f,
+                    content_area,
+                    history_turns,
+                    history_list_state,
+                    history_timestamps,
+                );
+            }
+            HistoryViewMode::Detail => {
+                render_history_details(
+                    f,
+                    content_area,
+                    history_turns,
+                    history_index,
+                    history_scroll_offset,
+                );
+            }
+            _ => unreachable!(),
         }
-        HistoryViewMode::Detail if !history_turns.is_empty() => {
-            render_history_details(f, area, history_turns, history_index, history_scroll_offset);
-            return;
-        }
-        _ => {}
+        return;
     }
 
     let text = if let Some(i) = selected {
@@ -554,6 +577,41 @@ pub fn render_details(
 
         f.render_widget(paragraph, area);
     }
+}
+
+/// Render compact session info header above history content.
+fn render_session_info_header(f: &mut ratatui::Frame, area: Rect, session: &ClaudeSession) {
+    let pane = &session.pane;
+    let (status_color, status_text) = status_display(&session.status);
+
+    // Line 1: Workspace + Status + Branch
+    let mut spans: Vec<Span<'_>> = vec![
+        Span::raw(" "),
+        Span::styled(&pane.workspace, Style::default().fg(Color::Yellow)),
+        Span::styled(" │ ", Style::default().fg(Color::DarkGray)),
+        Span::styled(status_text, Style::default().fg(status_color)),
+    ];
+
+    if let Some(branch) = &session.git_branch {
+        spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(
+            branch.as_str(),
+            Style::default().fg(Color::Cyan),
+        ));
+    }
+
+    let mut lines = vec![Line::from(spans)];
+
+    // Line 2: CWD
+    if let Some(cwd) = pane.cwd_path() {
+        lines.push(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(cwd, Style::default().fg(Color::DarkGray)),
+        ]));
+    }
+
+    let paragraph = Paragraph::new(lines);
+    f.render_widget(paragraph, area);
 }
 
 /// Render the history turn list in the details panel area.
