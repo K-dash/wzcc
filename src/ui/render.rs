@@ -564,7 +564,7 @@ fn render_history_list(
     list_state: &mut ListState,
     timestamps: &[Option<SystemTime>],
 ) {
-    let inner_width = area.width.saturating_sub(4) as usize; // borders + highlight symbol
+    let inner_width = area.width.saturating_sub(5) as usize; // borders(2) + highlight symbol ">> "(3)
 
     let items: Vec<ListItem> = turns
         .iter()

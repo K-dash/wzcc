@@ -981,4 +981,36 @@ mod tests {
             Some("2026-01-23T16:00:00.000Z")
         );
     }
+
+    #[test]
+    fn test_extract_turns_multi_turn_timestamps_with_max() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.jsonl");
+        // 3 turns: oldest(T1) -> middle(T2) -> newest(T3)
+        let content = [
+            r#"{"type":"user","timestamp":"2026-01-23T10:00:00.000Z","message":{"content":"first"}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"resp1"}]}}"#,
+            r#"{"type":"user","timestamp":"2026-01-23T11:00:00.000Z","message":{"content":"second"}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"resp2"}]}}"#,
+            r#"{"type":"user","timestamp":"2026-01-23T12:00:00.000Z","message":{"content":"third"}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"resp3"}]}}"#,
+        ]
+        .join("\n");
+        std::fs::write(&path, content).unwrap();
+
+        // Request only 2 turns (newest first due to reverse)
+        let turns = extract_conversation_turns(&path, 2).unwrap();
+        assert_eq!(turns.len(), 2);
+        // Newest first
+        assert_eq!(turns[0].user_prompt, "third");
+        assert_eq!(
+            turns[0].timestamp.as_deref(),
+            Some("2026-01-23T12:00:00.000Z")
+        );
+        assert_eq!(turns[1].user_prompt, "second");
+        assert_eq!(
+            turns[1].timestamp.as_deref(),
+            Some("2026-01-23T11:00:00.000Z")
+        );
+    }
 }
