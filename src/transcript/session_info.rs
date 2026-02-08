@@ -64,14 +64,26 @@ pub fn detect_session_info(pane: &Pane) -> SessionInfo {
             MappingResult::Stale(mapping) => {
                 // Mapping exists but is stale - don't fallback to CWD
                 // This prevents showing wrong status from another session with same CWD
-                // Preserve transcript_path and session_id so history browsing still works
+                // Read transcript for actual status instead of showing Unknown
+                let transcript_path = mapping.transcript_path.clone();
+                let (status, updated_at) = if transcript_path.exists() {
+                    let info = read_transcript_info(&transcript_path).unwrap_or(TranscriptInfo {
+                        status: SessionStatus::Unknown,
+                        last_prompt: None,
+                        last_output: None,
+                    });
+                    (info.status, get_file_mtime(&transcript_path))
+                } else {
+                    (SessionStatus::Unknown, None)
+                };
+
                 return SessionInfo {
-                    status: SessionStatus::Unknown,
+                    status,
                     last_prompt: None,
                     last_output: None,
                     session_id: Some(mapping.session_id),
-                    transcript_path: Some(mapping.transcript_path),
-                    updated_at: None,
+                    transcript_path: Some(transcript_path),
+                    updated_at,
                     warning: Some(
                         "Session info stale (statusLine not updating). Try interacting with the session.".to_string(),
                     ),
