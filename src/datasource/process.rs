@@ -76,11 +76,6 @@ impl ProcessTree {
 
         false
     }
-
-    /// Get process information for the specified PID
-    pub fn get(&self, pid: u32) -> Option<&ProcessInfo> {
-        self.processes.get(&pid)
-    }
 }
 
 /// Process data source trait
@@ -249,17 +244,6 @@ mod tests {
         // Check children structure
         assert_eq!(tree.children.get(&1), Some(&vec![100]));
         assert_eq!(tree.children.get(&100), Some(&vec![200]));
-    }
-
-    #[test]
-    fn test_process_tree_get() {
-        let processes = vec![create_process(100, 1, "bash")];
-
-        let tree = ProcessTree::build(processes);
-
-        assert!(tree.get(100).is_some());
-        assert_eq!(tree.get(100).unwrap().command, "bash");
-        assert!(tree.get(999).is_none());
     }
 
     #[test]

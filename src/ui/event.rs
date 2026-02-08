@@ -1,6 +1,6 @@
 use anyhow::Result;
 use crossterm::event::{
-    self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind,
+    self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers, MouseEvent,
 };
 use std::time::Duration;
 
@@ -45,17 +45,6 @@ impl EventHandler {
             Ok(Event::Tick)
         }
     }
-}
-
-/// Check if mouse event is a single click
-pub fn is_mouse_click(mouse: &MouseEvent) -> bool {
-    matches!(mouse.kind, MouseEventKind::Down(_))
-}
-
-/// Check if mouse event is a double click (crossterm doesn't support double click directly, so we use timing)
-pub fn is_mouse_double_click(mouse: &MouseEvent) -> bool {
-    // Note: Double click detection is done by timing measurement in App
-    matches!(mouse.kind, MouseEventKind::Down(_))
 }
 
 /// Key event helper

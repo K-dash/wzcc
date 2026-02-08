@@ -56,17 +56,6 @@ impl SessionStatus {
             SessionStatus::Unknown => "Unknown",
         }
     }
-
-    /// Get an icon for the status.
-    pub fn icon(&self) -> &'static str {
-        match self {
-            SessionStatus::Ready => "◇",
-            SessionStatus::Processing => "●",
-            SessionStatus::Idle => "○",
-            SessionStatus::WaitingForUser { .. } => "◐",
-            SessionStatus::Unknown => "?",
-        }
-    }
 }
 
 /// Configuration for status detection.
@@ -254,14 +243,6 @@ mod tests {
             .as_str(),
             "Waiting"
         );
-    }
-
-    #[test]
-    fn test_session_status_icon() {
-        assert_eq!(SessionStatus::Ready.icon(), "◇");
-        assert_eq!(SessionStatus::Processing.icon(), "●");
-        assert_eq!(SessionStatus::Idle.icon(), "○");
-        assert_eq!(SessionStatus::WaitingForUser { tools: vec![] }.icon(), "◐");
     }
 
     #[test]
