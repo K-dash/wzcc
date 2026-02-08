@@ -122,6 +122,58 @@ impl WeztermCli {
         Ok(())
     }
 
+    /// Split the specified pane and run a program in the new pane.
+    /// Returns the pane_id of the newly created pane.
+    ///
+    /// The command is executed via the user's shell (`$SHELL -ic "..."`) so that
+    /// shell aliases and functions are available.
+    ///
+    /// `direction` should be `"--right"` or `"--bottom"`.
+    /// Expected stdout format from `wezterm cli split-pane`: a single integer (e.g., "42\n")
+    pub fn split_pane(
+        pane_id: u32,
+        cwd: &str,
+        prog: &str,
+        args: &[String],
+        direction: &str,
+    ) -> Result<u32> {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+
+        // Build the shell command string from prog + args
+        let shell_cmd = if args.is_empty() {
+            prog.to_string()
+        } else {
+            let mut parts = vec![prog.to_string()];
+            parts.extend(args.iter().cloned());
+            parts.join(" ")
+        };
+
+        let output = Command::new("wezterm")
+            .args([
+                "cli",
+                "split-pane",
+                "--pane-id",
+                &pane_id.to_string(),
+                direction,
+                "--cwd",
+                cwd,
+                "--",
+                &shell,
+                "-ic",
+                &shell_cmd,
+            ])
+            .output()
+            .context("Failed to execute wezterm cli split-pane")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("wezterm cli split-pane failed: {}", stderr);
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        parse_pane_id(&stdout)
+    }
+
     /// Change tab title for the specified pane
     pub fn set_tab_title(pane_id: u32, title: &str) -> Result<()> {
         let output = Command::new("wezterm")
@@ -148,9 +200,33 @@ impl WeztermCli {
     }
 }
 
+/// Parse pane-id from wezterm cli spawn stdout output.
+/// Expected format: a single integer, optionally followed by whitespace/newline.
+fn parse_pane_id(stdout: &str) -> Result<u32> {
+    stdout
+        .trim()
+        .parse::<u32>()
+        .context("Failed to parse pane-id from wezterm cli spawn output")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_pane_id_valid() {
+        assert_eq!(parse_pane_id("42\n").unwrap(), 42);
+        assert_eq!(parse_pane_id("0").unwrap(), 0);
+        assert_eq!(parse_pane_id("  123  \n").unwrap(), 123);
+    }
+
+    #[test]
+    fn test_parse_pane_id_invalid() {
+        assert!(parse_pane_id("").is_err());
+        assert!(parse_pane_id("abc").is_err());
+        assert!(parse_pane_id("-1").is_err());
+        assert!(parse_pane_id("42 extra").is_err());
+    }
 
     #[test]
     #[ignore] // Skip in CI (requires wezterm CLI)
