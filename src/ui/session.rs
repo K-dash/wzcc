@@ -91,8 +91,6 @@ pub struct SessionInfo {
     pub last_output: Option<String>,
     pub session_id: Option<String>,
     pub transcript_path: Option<PathBuf>,
-    /// Whether this session was identified via statusLine bridge
-    pub has_mapping: bool,
     /// Last updated time (from transcript file modification time)
     pub updated_at: Option<SystemTime>,
     /// Warning message to display (e.g., stale mapping)
@@ -138,7 +136,6 @@ impl ClaudeSession {
                         last_output,
                         session_id: Some(mapping.session_id),
                         transcript_path: Some(transcript_path),
-                        has_mapping: true,
                         updated_at,
                         warning: None,
                     };
@@ -152,7 +149,6 @@ impl ClaudeSession {
                         last_output: None,
                         session_id: None,
                         transcript_path: None,
-                        has_mapping: false,
                         updated_at: None,
                         warning: Some(
                             "Session info stale (statusLine not updating). Try interacting with the session.".to_string(),
@@ -175,7 +171,6 @@ impl ClaudeSession {
             last_output,
             session_id: None,
             transcript_path: None,
-            has_mapping: false,
             updated_at,
             warning: None,
         }

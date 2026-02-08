@@ -7,7 +7,6 @@ mod info;
 mod parser;
 mod path;
 mod state;
-mod watcher;
 
 pub use info::{read_transcript_info, TranscriptInfo};
 pub use parser::{get_last_assistant_text, get_last_user_prompt, TranscriptEntry};
