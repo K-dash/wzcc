@@ -31,7 +31,7 @@ pub enum MappingResult {
     /// Valid, fresh mapping
     Valid(SessionMapping),
     /// Mapping exists but is stale (>5 minutes old)
-    Stale,
+    Stale(SessionMapping),
     /// No mapping exists for this TTY
     NotFound,
 }
@@ -72,7 +72,7 @@ impl SessionMapping {
     ///
     /// # Returns
     /// * `MappingResult::Valid(mapping)` if a valid mapping exists and is fresh
-    /// * `MappingResult::Stale` if mapping exists but is >5 minutes old
+    /// * `MappingResult::Stale(mapping)` if mapping exists but is >5 minutes old
     /// * `MappingResult::NotFound` if no mapping exists or is invalid
     pub fn from_tty_with_status(tty: &str) -> MappingResult {
         // Normalize TTY name (remove /dev/ prefix if present)
@@ -102,7 +102,7 @@ impl SessionMapping {
         let now = Utc::now();
         let age = now.signed_duration_since(mapping.updated_at);
         if age.num_minutes() > 5 {
-            return MappingResult::Stale;
+            return MappingResult::Stale(mapping);
         }
 
         MappingResult::Valid(mapping)
@@ -291,6 +291,39 @@ mod tests {
         // Both should be None since the file doesn't exist
         assert!(m1.is_none());
         assert!(m2.is_none());
+    }
+
+    #[test]
+    fn test_stale_mapping_preserves_data() {
+        // Write a mapping file with a timestamp >5 minutes in the past
+        let sessions_dir = SessionMapping::sessions_dir().unwrap();
+        fs::create_dir_all(&sessions_dir).unwrap();
+
+        let tty = "test_stale_tty_99999";
+        let path = SessionMapping::mapping_file_path(tty).unwrap();
+        let transcript_path = PathBuf::from("/tmp/test-transcript.jsonl");
+
+        let mapping = SessionMapping {
+            session_id: "stale-session-id".to_string(),
+            transcript_path: transcript_path.clone(),
+            cwd: "/tmp/test".to_string(),
+            tty: tty.to_string(),
+            updated_at: Utc::now() - chrono::Duration::minutes(10),
+        };
+        fs::write(&path, serde_json::to_string(&mapping).unwrap()).unwrap();
+
+        let result = SessionMapping::from_tty_with_status(tty);
+
+        // Clean up before assertions so file is removed even on failure
+        let _ = fs::remove_file(&path);
+
+        match result {
+            MappingResult::Stale(stale_mapping) => {
+                assert_eq!(stale_mapping.session_id, "stale-session-id");
+                assert_eq!(stale_mapping.transcript_path, transcript_path);
+            }
+            other => panic!("Expected MappingResult::Stale, got {:?}", other),
+        }
     }
 
     #[test]
