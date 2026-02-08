@@ -10,14 +10,8 @@ use unicode_width::UnicodeWidthChar;
 
 use super::session::{status_display, wrap_text_lines, ClaudeSession};
 
-/// Format relative time (e.g., "5s ago", "2m ago", "1h ago")
-fn format_relative_time(time: &SystemTime) -> String {
-    let now = SystemTime::now();
-    let duration = match now.duration_since(*time) {
-        Ok(d) => d,
-        Err(_) => return "now".to_string(),
-    };
-
+/// Format a duration as a relative time string (e.g., "5s", "2m", "1h", "3d").
+fn format_duration(duration: std::time::Duration) -> String {
     let secs = duration.as_secs();
     if secs < 60 {
         format!("{}s", secs)
@@ -30,27 +24,36 @@ fn format_relative_time(time: &SystemTime) -> String {
     }
 }
 
-/// Get color for elapsed time display
+/// Format relative time (e.g., "5s", "2m", "1h")
+fn format_relative_time(time: &SystemTime) -> String {
+    let now = SystemTime::now();
+    match now.duration_since(*time) {
+        Ok(d) => format_duration(d),
+        Err(_) => "now".to_string(),
+    }
+}
+
+/// Get color for a given elapsed duration.
 /// - < 5 minutes: Green (fresh/active)
 /// - 5-30 minutes: Yellow (slightly stale)
 /// - > 30 minutes: Red (inactive/stale)
-fn elapsed_time_color(time: &SystemTime) -> Color {
-    let now = SystemTime::now();
-    let duration = match now.duration_since(*time) {
-        Ok(d) => d,
-        Err(_) => return Color::Green,
-    };
-
+fn color_for_elapsed(duration: std::time::Duration) -> Color {
     let secs = duration.as_secs();
     if secs < 300 {
-        // < 5 minutes
         Color::Green
     } else if secs < 1800 {
-        // 5-30 minutes
         Color::Yellow
     } else {
-        // > 30 minutes
         Color::Red
+    }
+}
+
+/// Get color for elapsed time display based on a SystemTime.
+fn elapsed_time_color(time: &SystemTime) -> Color {
+    let now = SystemTime::now();
+    match now.duration_since(*time) {
+        Ok(d) => color_for_elapsed(d),
+        Err(_) => Color::Green,
     }
 }
 
@@ -571,4 +574,107 @@ pub fn render_footer(
     let paragraph = Paragraph::new(help_text).style(Style::default().fg(Color::DarkGray));
 
     f.render_widget(paragraph, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    // --- format_duration tests ---
+
+    #[test]
+    fn test_format_duration_seconds() {
+        assert_eq!(format_duration(Duration::from_secs(0)), "0s");
+        assert_eq!(format_duration(Duration::from_secs(1)), "1s");
+        assert_eq!(format_duration(Duration::from_secs(30)), "30s");
+        assert_eq!(format_duration(Duration::from_secs(59)), "59s");
+    }
+
+    #[test]
+    fn test_format_duration_minutes() {
+        assert_eq!(format_duration(Duration::from_secs(60)), "1m");
+        assert_eq!(format_duration(Duration::from_secs(90)), "1m"); // truncates
+        assert_eq!(format_duration(Duration::from_secs(300)), "5m");
+        assert_eq!(format_duration(Duration::from_secs(3599)), "59m");
+    }
+
+    #[test]
+    fn test_format_duration_hours() {
+        assert_eq!(format_duration(Duration::from_secs(3600)), "1h");
+        assert_eq!(format_duration(Duration::from_secs(7200)), "2h");
+        assert_eq!(format_duration(Duration::from_secs(86399)), "23h");
+    }
+
+    #[test]
+    fn test_format_duration_days() {
+        assert_eq!(format_duration(Duration::from_secs(86400)), "1d");
+        assert_eq!(format_duration(Duration::from_secs(172800)), "2d");
+    }
+
+    // --- format_relative_time tests ---
+
+    #[test]
+    fn test_format_relative_time_recent() {
+        let time = SystemTime::now() - Duration::from_secs(5);
+        let result = format_relative_time(&time);
+        // Should be "5s" or close (depending on timing)
+        assert!(result.ends_with('s'));
+    }
+
+    #[test]
+    fn test_format_relative_time_future() {
+        // Time in the future should return "now"
+        let time = SystemTime::now() + Duration::from_secs(100);
+        assert_eq!(format_relative_time(&time), "now");
+    }
+
+    // --- color_for_elapsed tests ---
+
+    #[test]
+    fn test_color_for_elapsed_green() {
+        assert_eq!(color_for_elapsed(Duration::from_secs(0)), Color::Green);
+        assert_eq!(color_for_elapsed(Duration::from_secs(60)), Color::Green);
+        assert_eq!(color_for_elapsed(Duration::from_secs(299)), Color::Green);
+    }
+
+    #[test]
+    fn test_color_for_elapsed_yellow() {
+        assert_eq!(color_for_elapsed(Duration::from_secs(300)), Color::Yellow);
+        assert_eq!(color_for_elapsed(Duration::from_secs(900)), Color::Yellow);
+        assert_eq!(color_for_elapsed(Duration::from_secs(1799)), Color::Yellow);
+    }
+
+    #[test]
+    fn test_color_for_elapsed_red() {
+        assert_eq!(color_for_elapsed(Duration::from_secs(1800)), Color::Red);
+        assert_eq!(color_for_elapsed(Duration::from_secs(3600)), Color::Red);
+        assert_eq!(color_for_elapsed(Duration::from_secs(86400)), Color::Red);
+    }
+
+    // --- elapsed_time_color tests ---
+
+    #[test]
+    fn test_elapsed_time_color_recent() {
+        let time = SystemTime::now() - Duration::from_secs(10);
+        assert_eq!(elapsed_time_color(&time), Color::Green);
+    }
+
+    #[test]
+    fn test_elapsed_time_color_stale() {
+        let time = SystemTime::now() - Duration::from_secs(600);
+        assert_eq!(elapsed_time_color(&time), Color::Yellow);
+    }
+
+    #[test]
+    fn test_elapsed_time_color_very_stale() {
+        let time = SystemTime::now() - Duration::from_secs(3600);
+        assert_eq!(elapsed_time_color(&time), Color::Red);
+    }
+
+    #[test]
+    fn test_elapsed_time_color_future() {
+        let time = SystemTime::now() + Duration::from_secs(100);
+        assert_eq!(elapsed_time_color(&time), Color::Green);
+    }
 }

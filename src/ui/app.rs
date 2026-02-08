@@ -257,29 +257,7 @@ impl App {
     /// Apply duplicate CWD guard: clear last_prompt/last_output for sessions
     /// that share the same CWD without statusLine bridge mapping.
     fn apply_duplicate_cwd_guard(&mut self) {
-        // Count sessions per cwd (only those without mapping AND without warning)
-        let mut cwd_counts: HashMap<String, usize> = HashMap::new();
-        for session in &self.sessions {
-            if session.session_id.is_none() && session.warning.is_none() {
-                if let Some(cwd) = session.pane.cwd_path() {
-                    *cwd_counts.entry(cwd).or_insert(0) += 1;
-                }
-            }
-        }
-
-        // Clear last_prompt/last_output for sessions with duplicate cwd (without mapping)
-        for session in &mut self.sessions {
-            if session.session_id.is_some() || session.warning.is_some() {
-                continue;
-            }
-            if let Some(cwd) = session.pane.cwd_path() {
-                if cwd_counts.get(&cwd).copied().unwrap_or(0) > 1 {
-                    session.last_prompt = None;
-                    session.last_output =
-                        Some("Run `wzcc install-bridge` for multi-session support".to_string());
-                }
-            }
-        }
+        apply_duplicate_cwd_guard(&mut self.sessions);
     }
 
     /// Lightweight refresh: only re-read transcript data for known sessions.
@@ -371,28 +349,8 @@ impl App {
         // Apply duplicate CWD guard
         self.apply_duplicate_cwd_guard();
 
-        // Sort by workspace → cwd → pane_id
-        // Current workspace comes first
-        let current_ws = self.current_workspace.clone();
-        self.sessions.sort_by(|a, b| {
-            // Current workspace should come first
-            let ws_a_is_current = a.pane.workspace == current_ws;
-            let ws_b_is_current = b.pane.workspace == current_ws;
-            match (ws_a_is_current, ws_b_is_current) {
-                (true, false) => std::cmp::Ordering::Less,
-                (false, true) => std::cmp::Ordering::Greater,
-                _ => {
-                    // Same priority, sort by workspace name, then cwd, then pane_id
-                    let ws_a = &a.pane.workspace;
-                    let ws_b = &b.pane.workspace;
-                    let cwd_a = a.pane.cwd_path().unwrap_or_default();
-                    let cwd_b = b.pane.cwd_path().unwrap_or_default();
-                    ws_a.cmp(ws_b)
-                        .then(cwd_a.cmp(&cwd_b))
-                        .then(a.pane.pane_id.cmp(&b.pane.pane_id))
-                }
-            }
-        });
+        // Sort by workspace → cwd → pane_id (current workspace first)
+        sort_sessions(&mut self.sessions, &self.current_workspace);
 
         // Maintain selection position (reselect if same pane_id exists)
         if !self.sessions.is_empty() {
@@ -498,46 +456,7 @@ impl App {
     /// Calculate session index from list display row
     /// Returns the session corresponding to the clicked row, considering group headers
     fn row_to_session_index(&self, row: usize) -> Option<usize> {
-        // Map row number to session index
-        let mut current_row = 0;
-        let mut current_ws: Option<String> = None;
-        let mut current_cwd: Option<String> = None;
-
-        for (session_idx, session) in self.sessions.iter().enumerate() {
-            let ws = &session.pane.workspace;
-            let cwd = session.pane.cwd_path().unwrap_or_default();
-
-            // Add header row for new workspace
-            if current_ws.as_ref() != Some(ws) {
-                current_ws = Some(ws.clone());
-                current_cwd = None; // Reset cwd for new workspace
-                                    // Workspace header row
-                if current_row == row {
-                    // Ignore header click (not a session)
-                    return None;
-                }
-                current_row += 1;
-            }
-
-            // Add header row for new CWD
-            if current_cwd.as_ref() != Some(&cwd) {
-                current_cwd = Some(cwd.clone());
-                // CWD header row
-                if current_row == row {
-                    // Ignore header click (not a session)
-                    return None;
-                }
-                current_row += 1;
-            }
-
-            // Session row
-            if current_row == row {
-                return Some(session_idx);
-            }
-            current_row += 1;
-        }
-
-        None
+        row_to_session_index(&self.sessions, row)
     }
 
     /// Enter input mode
@@ -963,5 +882,332 @@ impl App {
 
         // Render footer with keybindings help
         render_footer(f, footer_area, self.input_mode, self.toast.as_ref());
+    }
+}
+
+/// Apply duplicate CWD guard: clear last_prompt/last_output for sessions
+/// that share the same CWD without statusLine bridge mapping.
+fn apply_duplicate_cwd_guard(sessions: &mut [ClaudeSession]) {
+    let mut cwd_counts: HashMap<String, usize> = HashMap::new();
+    for session in sessions.iter() {
+        if session.session_id.is_none() && session.warning.is_none() {
+            if let Some(cwd) = session.pane.cwd_path() {
+                *cwd_counts.entry(cwd).or_insert(0) += 1;
+            }
+        }
+    }
+
+    for session in sessions.iter_mut() {
+        if session.session_id.is_some() || session.warning.is_some() {
+            continue;
+        }
+        if let Some(cwd) = session.pane.cwd_path() {
+            if cwd_counts.get(&cwd).copied().unwrap_or(0) > 1 {
+                session.last_prompt = None;
+                session.last_output =
+                    Some("Run `wzcc install-bridge` for multi-session support".to_string());
+            }
+        }
+    }
+}
+
+/// Calculate session index from list display row.
+/// Returns the session corresponding to the clicked row, considering group headers.
+fn row_to_session_index(sessions: &[ClaudeSession], row: usize) -> Option<usize> {
+    let mut current_row = 0;
+    let mut current_ws: Option<String> = None;
+    let mut current_cwd: Option<String> = None;
+
+    for (session_idx, session) in sessions.iter().enumerate() {
+        let ws = &session.pane.workspace;
+        let cwd = session.pane.cwd_path().unwrap_or_default();
+
+        // Workspace header row
+        if current_ws.as_ref() != Some(ws) {
+            current_ws = Some(ws.clone());
+            current_cwd = None;
+            if current_row == row {
+                return None; // header click
+            }
+            current_row += 1;
+        }
+
+        // CWD header row
+        if current_cwd.as_ref() != Some(&cwd) {
+            current_cwd = Some(cwd.clone());
+            if current_row == row {
+                return None; // header click
+            }
+            current_row += 1;
+        }
+
+        // Session row
+        if current_row == row {
+            return Some(session_idx);
+        }
+        current_row += 1;
+    }
+
+    None
+}
+
+/// Sort sessions: current workspace first, then by workspace name, CWD, pane_id.
+fn sort_sessions(sessions: &mut [ClaudeSession], current_workspace: &str) {
+    sessions.sort_by(|a, b| {
+        let ws_a_is_current = a.pane.workspace == current_workspace;
+        let ws_b_is_current = b.pane.workspace == current_workspace;
+        match (ws_a_is_current, ws_b_is_current) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => {
+                let ws_a = &a.pane.workspace;
+                let ws_b = &b.pane.workspace;
+                let cwd_a = a.pane.cwd_path().unwrap_or_default();
+                let cwd_b = b.pane.cwd_path().unwrap_or_default();
+                ws_a.cmp(ws_b)
+                    .then(cwd_a.cmp(&cwd_b))
+                    .then(a.pane.pane_id.cmp(&b.pane.pane_id))
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::detector::DetectionReason;
+    use crate::models::Pane;
+    use crate::transcript::SessionStatus;
+
+    fn make_pane(pane_id: u32, workspace: &str, cwd: &str) -> Pane {
+        Pane {
+            pane_id,
+            tab_id: 0,
+            window_id: 0,
+            workspace: workspace.to_string(),
+            title: format!("pane-{}", pane_id),
+            cwd: Some(format!("file://{}", cwd)),
+            tty_name: None,
+            is_active: false,
+            tab_title: None,
+            window_title: None,
+        }
+    }
+
+    fn make_session(pane_id: u32, workspace: &str, cwd: &str) -> ClaudeSession {
+        ClaudeSession {
+            pane: make_pane(pane_id, workspace, cwd),
+            detected: true,
+            reason: DetectionReason::DirectTtyMatch {
+                process_name: "claude".to_string(),
+            },
+            status: SessionStatus::Idle,
+            git_branch: None,
+            last_prompt: Some("test prompt".to_string()),
+            last_output: Some("test output".to_string()),
+            session_id: None,
+            transcript_path: None,
+            updated_at: None,
+            warning: None,
+        }
+    }
+
+    fn make_session_with_mapping(
+        pane_id: u32,
+        workspace: &str,
+        cwd: &str,
+        session_id: &str,
+    ) -> ClaudeSession {
+        let mut s = make_session(pane_id, workspace, cwd);
+        s.session_id = Some(session_id.to_string());
+        s
+    }
+
+    fn make_session_with_warning(pane_id: u32, workspace: &str, cwd: &str) -> ClaudeSession {
+        let mut s = make_session(pane_id, workspace, cwd);
+        s.warning = Some("stale".to_string());
+        s
+    }
+
+    // --- row_to_session_index tests ---
+
+    #[test]
+    fn test_row_to_session_single_session() {
+        // Layout: row 0 = workspace header, row 1 = cwd header, row 2 = session
+        let sessions = vec![make_session(1, "default", "/home/user/project")];
+        assert_eq!(row_to_session_index(&sessions, 0), None); // workspace header
+        assert_eq!(row_to_session_index(&sessions, 1), None); // cwd header
+        assert_eq!(row_to_session_index(&sessions, 2), Some(0)); // session
+        assert_eq!(row_to_session_index(&sessions, 3), None); // out of bounds
+    }
+
+    #[test]
+    fn test_row_to_session_same_workspace_same_cwd() {
+        // Two sessions, same workspace, same cwd
+        // row 0 = ws header, row 1 = cwd header, row 2 = session 0, row 3 = session 1
+        let sessions = vec![
+            make_session(1, "default", "/home/user/project"),
+            make_session(2, "default", "/home/user/project"),
+        ];
+        assert_eq!(row_to_session_index(&sessions, 0), None);
+        assert_eq!(row_to_session_index(&sessions, 1), None);
+        assert_eq!(row_to_session_index(&sessions, 2), Some(0));
+        assert_eq!(row_to_session_index(&sessions, 3), Some(1));
+    }
+
+    #[test]
+    fn test_row_to_session_same_workspace_different_cwd() {
+        // row 0 = ws header, row 1 = cwd1 header, row 2 = session 0,
+        // row 3 = cwd2 header, row 4 = session 1
+        let sessions = vec![
+            make_session(1, "default", "/home/user/project-a"),
+            make_session(2, "default", "/home/user/project-b"),
+        ];
+        assert_eq!(row_to_session_index(&sessions, 0), None); // ws header
+        assert_eq!(row_to_session_index(&sessions, 1), None); // cwd1 header
+        assert_eq!(row_to_session_index(&sessions, 2), Some(0));
+        assert_eq!(row_to_session_index(&sessions, 3), None); // cwd2 header
+        assert_eq!(row_to_session_index(&sessions, 4), Some(1));
+    }
+
+    #[test]
+    fn test_row_to_session_different_workspaces() {
+        // row 0 = ws1 header, row 1 = cwd header, row 2 = session 0,
+        // row 3 = ws2 header, row 4 = cwd header, row 5 = session 1
+        let sessions = vec![
+            make_session(1, "work", "/home/user/project"),
+            make_session(2, "personal", "/home/user/hobby"),
+        ];
+        assert_eq!(row_to_session_index(&sessions, 0), None); // ws1 header
+        assert_eq!(row_to_session_index(&sessions, 1), None); // cwd header
+        assert_eq!(row_to_session_index(&sessions, 2), Some(0));
+        assert_eq!(row_to_session_index(&sessions, 3), None); // ws2 header
+        assert_eq!(row_to_session_index(&sessions, 4), None); // cwd header
+        assert_eq!(row_to_session_index(&sessions, 5), Some(1));
+    }
+
+    #[test]
+    fn test_row_to_session_empty() {
+        let sessions: Vec<ClaudeSession> = vec![];
+        assert_eq!(row_to_session_index(&sessions, 0), None);
+    }
+
+    // --- apply_duplicate_cwd_guard tests ---
+
+    #[test]
+    fn test_duplicate_cwd_guard_clears_output() {
+        let mut sessions = vec![
+            make_session(1, "default", "/home/user/project"),
+            make_session(2, "default", "/home/user/project"),
+        ];
+        apply_duplicate_cwd_guard(&mut sessions);
+        assert_eq!(sessions[0].last_prompt, None);
+        assert_eq!(
+            sessions[0].last_output.as_deref(),
+            Some("Run `wzcc install-bridge` for multi-session support")
+        );
+        assert_eq!(sessions[1].last_prompt, None);
+    }
+
+    #[test]
+    fn test_duplicate_cwd_guard_different_cwd_untouched() {
+        let mut sessions = vec![
+            make_session(1, "default", "/home/user/project-a"),
+            make_session(2, "default", "/home/user/project-b"),
+        ];
+        apply_duplicate_cwd_guard(&mut sessions);
+        // Different CWDs -> no guard applied
+        assert_eq!(sessions[0].last_prompt.as_deref(), Some("test prompt"));
+        assert_eq!(sessions[1].last_prompt.as_deref(), Some("test prompt"));
+    }
+
+    #[test]
+    fn test_duplicate_cwd_guard_with_mapping_skipped() {
+        let mut sessions = vec![
+            make_session_with_mapping(1, "default", "/home/user/project", "sess-1"),
+            make_session(2, "default", "/home/user/project"),
+        ];
+        apply_duplicate_cwd_guard(&mut sessions);
+        // Session with mapping is excluded from counting -> only 1 unmapped session
+        // so no guard applied to either
+        assert_eq!(sessions[0].last_prompt.as_deref(), Some("test prompt"));
+        assert_eq!(sessions[1].last_prompt.as_deref(), Some("test prompt"));
+    }
+
+    #[test]
+    fn test_duplicate_cwd_guard_with_warning_skipped() {
+        let mut sessions = vec![
+            make_session_with_warning(1, "default", "/home/user/project"),
+            make_session(2, "default", "/home/user/project"),
+        ];
+        apply_duplicate_cwd_guard(&mut sessions);
+        // Session with warning is excluded from counting
+        assert_eq!(sessions[0].last_prompt.as_deref(), Some("test prompt"));
+        assert_eq!(sessions[1].last_prompt.as_deref(), Some("test prompt"));
+    }
+
+    #[test]
+    fn test_duplicate_cwd_guard_three_sessions_same_cwd() {
+        let mut sessions = vec![
+            make_session(1, "default", "/home/user/project"),
+            make_session(2, "default", "/home/user/project"),
+            make_session(3, "default", "/home/user/project"),
+        ];
+        apply_duplicate_cwd_guard(&mut sessions);
+        for s in &sessions {
+            assert_eq!(s.last_prompt, None);
+        }
+    }
+
+    // --- sort_sessions tests ---
+
+    #[test]
+    fn test_sort_current_workspace_first() {
+        let mut sessions = vec![
+            make_session(1, "other", "/tmp"),
+            make_session(2, "current", "/tmp"),
+        ];
+        sort_sessions(&mut sessions, "current");
+        assert_eq!(sessions[0].pane.workspace, "current");
+        assert_eq!(sessions[1].pane.workspace, "other");
+    }
+
+    #[test]
+    fn test_sort_by_workspace_then_cwd_then_pane_id() {
+        let mut sessions = vec![
+            make_session(3, "alpha", "/home/b"),
+            make_session(1, "alpha", "/home/a"),
+            make_session(2, "alpha", "/home/a"),
+        ];
+        sort_sessions(&mut sessions, "none");
+        assert_eq!(sessions[0].pane.pane_id, 1);
+        assert_eq!(sessions[1].pane.pane_id, 2);
+        assert_eq!(sessions[2].pane.pane_id, 3);
+    }
+
+    #[test]
+    fn test_sort_multiple_workspaces() {
+        let mut sessions = vec![
+            make_session(1, "beta", "/tmp"),
+            make_session(2, "alpha", "/tmp"),
+            make_session(3, "current", "/tmp"),
+        ];
+        sort_sessions(&mut sessions, "current");
+        assert_eq!(sessions[0].pane.workspace, "current"); // current first
+        assert_eq!(sessions[1].pane.workspace, "alpha"); // then alphabetical
+        assert_eq!(sessions[2].pane.workspace, "beta");
+    }
+
+    #[test]
+    fn test_sort_stable_for_same_workspace_and_cwd() {
+        let mut sessions = vec![
+            make_session(5, "ws", "/home/project"),
+            make_session(2, "ws", "/home/project"),
+            make_session(8, "ws", "/home/project"),
+        ];
+        sort_sessions(&mut sessions, "ws");
+        assert_eq!(sessions[0].pane.pane_id, 2);
+        assert_eq!(sessions[1].pane.pane_id, 5);
+        assert_eq!(sessions[2].pane.pane_id, 8);
     }
 }
