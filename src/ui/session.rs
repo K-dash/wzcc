@@ -140,7 +140,11 @@ mod tests {
         // "| スカラー | @required |" display width:
         // | (1) + space(1) + ス(2)+カ(2)+ラ(2)+ー(2) + space(1) + |(1) + space(1) + @required(9) + space(1) + |(1) = 24
         // Should wrap into 2 lines at width 20
-        assert!(lines.len() >= 2, "Expected wrapping for CJK table row, got {} lines", lines.len());
+        assert!(
+            lines.len() >= 2,
+            "Expected wrapping for CJK table row, got {} lines",
+            lines.len()
+        );
     }
 }
 
