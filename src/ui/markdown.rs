@@ -129,6 +129,9 @@ pub fn markdown_to_lines_truncated(
     width: usize,
     max_lines: usize,
 ) -> Vec<Line<'static>> {
+    if max_lines == 0 {
+        return Vec::new();
+    }
     let all_lines = markdown_to_lines(text, width);
     if all_lines.len() <= max_lines {
         all_lines
@@ -219,7 +222,8 @@ fn markdown_to_lines_inner(text: &str) -> Vec<Line<'static>> {
     let mut code_block_content = String::new();
 
     let mut list_depth: usize = 0;
-    let mut ordered_list_index: Option<u64> = None;
+    let mut list_index_stack: Vec<Option<u64>> = Vec::new();
+    let mut link_url_stack: Vec<String> = Vec::new();
 
     for event in parser {
         match event {
@@ -271,17 +275,17 @@ fn markdown_to_lines_inner(text: &str) -> Vec<Line<'static>> {
             Event::Start(Tag::List(first_item)) => {
                 flush_line(&mut current_spans, &mut lines);
                 list_depth += 1;
-                ordered_list_index = first_item;
+                list_index_stack.push(first_item);
             }
             Event::End(TagEnd::List(_)) => {
                 list_depth = list_depth.saturating_sub(1);
-                ordered_list_index = None;
+                list_index_stack.pop();
                 lines.push(Line::from(""));
             }
 
             Event::Start(Tag::Item) => {
                 let indent = "  ".repeat(list_depth.saturating_sub(1));
-                let bullet = if let Some(idx) = &mut ordered_list_index {
+                let bullet = if let Some(Some(idx)) = list_index_stack.last_mut() {
                     let s = format!("{}{}. ", indent, idx);
                     *idx += 1;
                     s
@@ -335,6 +339,25 @@ fn markdown_to_lines_inner(text: &str) -> Vec<Line<'static>> {
             }
             Event::End(TagEnd::Strikethrough) => {
                 style_stack.pop();
+            }
+
+            Event::Start(Tag::Link { dest_url, .. }) => {
+                // Push underline style for link text; store URL for End handler
+                let current = current_style(&style_stack);
+                style_stack.push(current.add_modifier(Modifier::UNDERLINED));
+                // Stash the URL on the stack as a marker (we use a dedicated vec)
+                link_url_stack.push(dest_url.to_string());
+            }
+            Event::End(TagEnd::Link) => {
+                style_stack.pop();
+                if let Some(url) = link_url_stack.pop() {
+                    if !url.is_empty() {
+                        current_spans.push(Span::styled(
+                            format!(" ({})", url),
+                            Style::default().fg(Color::DarkGray),
+                        ));
+                    }
+                }
             }
 
             Event::Code(code_text) => {
@@ -574,5 +597,45 @@ mod tests {
             .iter()
             .any(|l| l.spans.iter().any(|s| s.content.contains('─')));
         assert!(has_rule);
+    }
+
+    #[test]
+    fn test_nested_ordered_list() {
+        let input = "1. outer1\n   1. inner1\n   2. inner2\n2. outer2";
+        let lines = markdown_to_lines(input, W);
+        let all_text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+        // After the nested list ends, the outer list should continue with "2."
+        assert!(
+            all_text.contains("2. outer2"),
+            "outer numbering broken: {all_text}"
+        );
+    }
+
+    #[test]
+    fn test_link_shows_url() {
+        let input = "[click here](https://example.com)";
+        let lines = markdown_to_lines(input, W);
+        let all_text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+        assert!(
+            all_text.contains("click here"),
+            "link text missing: {all_text}"
+        );
+        assert!(
+            all_text.contains("https://example.com"),
+            "link URL missing: {all_text}"
+        );
+    }
+
+    #[test]
+    fn test_truncation_zero_max_lines() {
+        let input = "some text";
+        let lines = markdown_to_lines_truncated(input, W, 0);
+        assert!(lines.is_empty());
     }
 }
