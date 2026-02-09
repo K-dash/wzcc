@@ -418,6 +418,37 @@ mod tests {
     }
 
     #[test]
+    fn test_detect_absent_stop_reason_returns_idle() {
+        // Assistant with stop_reason field absent (legacy/malformed) should be Idle, not Processing
+        let file = create_transcript(&[
+            r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"content":[{"type":"text","text":"Hello"}]}}"#,
+        ]);
+        let status = detect_session_status(file.path()).unwrap();
+        assert_eq!(status, SessionStatus::Idle);
+    }
+
+    #[test]
+    fn test_detect_absent_stop_reason_behind_system_entry_returns_idle() {
+        // Assistant with absent stop_reason behind an internal entry should be Idle
+        let file = create_transcript(&[
+            r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"content":[{"type":"text","text":"Hello"}]}}"#,
+            r#"{"type":"file-history-snapshot","timestamp":"2026-01-23T16:29:07.719Z"}"#,
+        ]);
+        let status = detect_session_status(file.path()).unwrap();
+        assert_eq!(status, SessionStatus::Idle);
+    }
+
+    #[test]
+    fn test_detect_absent_stop_reason_empty_content_returns_idle() {
+        // Assistant with absent stop_reason and empty content should be Idle
+        let file = create_transcript(&[
+            r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"content":[]}}"#,
+        ]);
+        let status = detect_session_status(file.path()).unwrap();
+        assert_eq!(status, SessionStatus::Idle);
+    }
+
+    #[test]
     fn test_detect_with_custom_timeout() {
         // Tool use with 5 seconds old should be WaitingForUser with 3 second timeout
         let old_time = Utc::now() - chrono::Duration::seconds(5);
