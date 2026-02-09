@@ -33,6 +33,10 @@ use super::render::{render_details, render_footer, render_list, HistoryViewMode}
 use super::session::ClaudeSession;
 use super::toast::Toast;
 
+/// Debounce interval (ms) for transcript file refreshes.
+/// 200ms keeps the status responsive while coalescing burst writes during streaming.
+const TRANSCRIPT_DEBOUNCE_MS: u64 = 200;
+
 /// TUI application
 pub struct App {
     /// Claude Code session list
@@ -223,7 +227,7 @@ impl App {
     /// Check if enough time has passed for a debounced transcript refresh.
     /// Uses trailing-edge debounce: if not enough time passed, sets pending flag.
     fn should_refresh_transcripts(&mut self) -> bool {
-        let debounce = Duration::from_millis(500);
+        let debounce = Duration::from_millis(TRANSCRIPT_DEBOUNCE_MS);
         if self.last_transcript_refresh.elapsed() >= debounce {
             self.pending_transcript_refresh = false;
             self.last_transcript_refresh = Instant::now();
@@ -1067,7 +1071,8 @@ impl App {
 
                     // Flush pending transcript refresh (trailing-edge debounce)
                     if self.pending_transcript_refresh
-                        && self.last_transcript_refresh.elapsed() >= Duration::from_millis(500)
+                        && self.last_transcript_refresh.elapsed()
+                            >= Duration::from_millis(TRANSCRIPT_DEBOUNCE_MS)
                     {
                         self.refresh_transcripts();
                         self.pending_transcript_refresh = false;

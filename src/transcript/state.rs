@@ -128,6 +128,9 @@ pub fn detect_status_from_entries_with_config(
             if entry.is_stop_hook_summary() || entry.is_turn_duration() || entry.is_end_turn() {
                 return SessionStatus::Idle;
             }
+            if entry.is_streaming() {
+                return SessionStatus::Processing;
+            }
             if entry.type_ == "assistant" && !entry.is_tool_use() {
                 return SessionStatus::Idle;
             }
@@ -151,6 +154,11 @@ pub fn detect_status_from_entries_with_config(
     // Check for assistant with tool_use
     if last.is_tool_use() {
         return check_tool_use_status(last, config);
+    }
+
+    // Check for streaming assistant (stop_reason: null, no tool_use) - still generating
+    if last.is_streaming() {
+        return SessionStatus::Processing;
     }
 
     // Check for assistant with text only (no tool_use) - this means Claude finished responding
@@ -199,15 +207,6 @@ pub fn detect_status_from_entries_with_config(
         // If progress exists after user message (and no turn_duration), it's Processing
         for entry in after_user.iter() {
             if entry.is_progress() {
-                return SessionStatus::Processing;
-            }
-        }
-    }
-
-    // Check for assistant with stop_reason: null - still streaming
-    if last.type_ == "assistant" {
-        if let Some(msg) = &last.message {
-            if msg.stop_reason.is_none() {
                 return SessionStatus::Processing;
             }
         }
@@ -388,14 +387,34 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_assistant_without_tool_use_returns_idle() {
-        // Assistant without tool_use is considered Idle (even with stop_reason: null)
-        // This is because the current impl checks !is_tool_use() first
+    fn test_detect_streaming_assistant_returns_processing() {
+        // Streaming assistant (stop_reason: null, no tool_use) means still generating
         let file = create_transcript(&[
             r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"stop_reason":null,"content":[]}}"#,
         ]);
         let status = detect_session_status(file.path()).unwrap();
-        assert_eq!(status, SessionStatus::Idle);
+        assert_eq!(status, SessionStatus::Processing);
+    }
+
+    #[test]
+    fn test_detect_streaming_assistant_with_text_returns_processing() {
+        // Streaming assistant with partial text (stop_reason: null) means still generating
+        let file = create_transcript(&[
+            r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"stop_reason":null,"content":[{"type":"text","text":"Let me think about"}]}}"#,
+        ]);
+        let status = detect_session_status(file.path()).unwrap();
+        assert_eq!(status, SessionStatus::Processing);
+    }
+
+    #[test]
+    fn test_detect_streaming_behind_system_entry_returns_processing() {
+        // Streaming assistant followed by an internal entry should still be Processing
+        let file = create_transcript(&[
+            r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"stop_reason":null,"content":[{"type":"text","text":"Working on it..."}]}}"#,
+            r#"{"type":"file-history-snapshot","timestamp":"2026-01-23T16:29:07.719Z"}"#,
+        ]);
+        let status = detect_session_status(file.path()).unwrap();
+        assert_eq!(status, SessionStatus::Processing);
     }
 
     #[test]

@@ -150,6 +150,18 @@ impl TranscriptEntry {
                 .unwrap_or(false)
     }
 
+    /// Check if this is a streaming assistant entry (stop_reason is null, no tool_use).
+    /// This indicates Claude is actively generating a response.
+    pub fn is_streaming(&self) -> bool {
+        if self.type_ != "assistant" {
+            return false;
+        }
+        let Some(msg) = &self.message else {
+            return false;
+        };
+        msg.stop_reason.is_none() && !msg.content.iter().any(|c| c.type_ == "tool_use")
+    }
+
     /// Check if this is a progress entry (indicates processing).
     pub fn is_progress(&self) -> bool {
         self.type_ == "progress"
@@ -992,6 +1004,49 @@ mod tests {
             turns[0].timestamp.as_deref(),
             Some("2026-01-23T16:00:00.000Z")
         );
+    }
+
+    // is_streaming tests
+    #[test]
+    fn test_is_streaming_true() {
+        let json = r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"stop_reason":null,"content":[]}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.is_streaming());
+    }
+
+    #[test]
+    fn test_is_streaming_true_with_text() {
+        let json = r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"stop_reason":null,"content":[{"type":"text","text":"partial"}]}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.is_streaming());
+    }
+
+    #[test]
+    fn test_is_streaming_false_end_turn() {
+        let json = r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"Done"}]}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(!entry.is_streaming());
+    }
+
+    #[test]
+    fn test_is_streaming_false_tool_use() {
+        let json = r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"stop_reason":null,"content":[{"type":"tool_use","name":"Read"}]}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(!entry.is_streaming());
+    }
+
+    #[test]
+    fn test_is_streaming_false_no_message() {
+        let json = r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z"}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(!entry.is_streaming());
+    }
+
+    #[test]
+    fn test_is_streaming_false_not_assistant() {
+        let json = r#"{"type":"user","timestamp":"2026-01-23T16:29:06.719Z"}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(!entry.is_streaming());
     }
 
     #[test]
