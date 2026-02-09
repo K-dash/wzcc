@@ -94,9 +94,25 @@ pub struct ContentBlock {
 /// The message structure within an assistant entry.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AssistantMessage {
-    pub stop_reason: Option<String>,
+    /// Distinguishes three states:
+    /// - `None` — field absent from JSON (legacy/malformed entry)
+    /// - `Some(None)` — field explicitly `null` (streaming in progress)
+    /// - `Some(Some("end_turn"))` / `Some(Some("tool_use"))` — completed with reason
+    #[serde(default, deserialize_with = "deserialize_present_field")]
+    pub stop_reason: Option<Option<String>>,
     #[serde(default)]
     pub content: Vec<ContentBlock>,
+}
+
+/// Deserializer that wraps any present JSON value in `Some()`, letting
+/// `#[serde(default)]` supply `None` for missing fields. This gives us
+/// `Option<Option<T>>` semantics: absent → `None`, null → `Some(None)`,
+/// value → `Some(Some(v))`.
+fn deserialize_present_field<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 /// Progress data for hook progress entries.
@@ -129,8 +145,8 @@ impl TranscriptEntry {
             return false;
         };
 
-        // Check stop_reason
-        if msg.stop_reason.as_deref() == Some("tool_use") {
+        // Check stop_reason (flatten Option<Option<String>> to Option<&str>)
+        if msg.stop_reason.as_ref().and_then(|o| o.as_deref()) == Some("tool_use") {
             return true;
         }
 
@@ -146,8 +162,22 @@ impl TranscriptEntry {
                 .message
                 .as_ref()
                 .and_then(|m| m.stop_reason.as_ref())
+                .and_then(|o| o.as_ref())
                 .map(|s| s == "end_turn")
                 .unwrap_or(false)
+    }
+
+    /// Check if this is a streaming assistant entry (stop_reason is explicitly null,
+    /// no tool_use). Returns false when stop_reason is absent (legacy/malformed entries).
+    pub fn is_streaming(&self) -> bool {
+        if self.type_ != "assistant" {
+            return false;
+        }
+        let Some(msg) = &self.message else {
+            return false;
+        };
+        // Some(None) = explicitly null (streaming); None = field absent (not streaming)
+        matches!(msg.stop_reason, Some(None)) && !msg.content.iter().any(|c| c.type_ == "tool_use")
     }
 
     /// Check if this is a progress entry (indicates processing).
@@ -991,6 +1021,79 @@ mod tests {
         assert_eq!(
             turns[0].timestamp.as_deref(),
             Some("2026-01-23T16:00:00.000Z")
+        );
+    }
+
+    // is_streaming tests
+    #[test]
+    fn test_is_streaming_true() {
+        let json = r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"stop_reason":null,"content":[]}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.is_streaming());
+    }
+
+    #[test]
+    fn test_is_streaming_true_with_text() {
+        let json = r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"stop_reason":null,"content":[{"type":"text","text":"partial"}]}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.is_streaming());
+    }
+
+    #[test]
+    fn test_is_streaming_false_end_turn() {
+        let json = r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"Done"}]}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(!entry.is_streaming());
+    }
+
+    #[test]
+    fn test_is_streaming_false_tool_use() {
+        let json = r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"stop_reason":null,"content":[{"type":"tool_use","name":"Read"}]}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(!entry.is_streaming());
+    }
+
+    #[test]
+    fn test_is_streaming_false_no_message() {
+        let json = r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z"}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(!entry.is_streaming());
+    }
+
+    #[test]
+    fn test_is_streaming_false_not_assistant() {
+        let json = r#"{"type":"user","timestamp":"2026-01-23T16:29:06.719Z"}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(!entry.is_streaming());
+    }
+
+    #[test]
+    fn test_is_streaming_false_stop_reason_absent() {
+        // stop_reason field missing entirely (legacy/malformed) must NOT be treated as streaming
+        let json = r#"{"type":"assistant","timestamp":"2026-01-23T16:29:06.719Z","message":{"content":[{"type":"text","text":"done"}]}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(json).unwrap();
+        assert!(!entry.is_streaming());
+    }
+
+    #[test]
+    fn test_stop_reason_absent_vs_null_deserialization() {
+        // Absent: stop_reason field not in JSON → None
+        let absent = r#"{"type":"assistant","timestamp":"t","message":{"content":[]}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(absent).unwrap();
+        assert_eq!(entry.message.as_ref().unwrap().stop_reason, None);
+
+        // Null: stop_reason explicitly null → Some(None)
+        let null =
+            r#"{"type":"assistant","timestamp":"t","message":{"stop_reason":null,"content":[]}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(null).unwrap();
+        assert_eq!(entry.message.as_ref().unwrap().stop_reason, Some(None));
+
+        // Present: stop_reason has value → Some(Some("end_turn"))
+        let present = r#"{"type":"assistant","timestamp":"t","message":{"stop_reason":"end_turn","content":[]}}"#;
+        let entry: TranscriptEntry = serde_json::from_str(present).unwrap();
+        assert_eq!(
+            entry.message.as_ref().unwrap().stop_reason,
+            Some(Some("end_turn".to_string()))
         );
     }
 
