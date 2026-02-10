@@ -114,7 +114,7 @@ fn plain_text_lines(text: &str) -> Vec<Line<'static>> {
 pub fn markdown_to_lines(text: &str, width: usize) -> Vec<Line<'static>> {
     // Guard: catch panics from pulldown-cmark (shouldn't happen, but be safe)
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let logical = markdown_to_lines_inner(text);
+        let logical = markdown_to_lines_inner(text, width);
         wrap_lines(logical, width)
     })) {
         Ok(lines) => lines,
@@ -209,7 +209,7 @@ fn wrap_lines(lines: Vec<Line<'static>>, width: usize) -> Vec<Line<'static>> {
 // Internal implementation
 // ---------------------------------------------------------------------------
 
-fn markdown_to_lines_inner(text: &str) -> Vec<Line<'static>> {
+fn markdown_to_lines_inner(text: &str, width: usize) -> Vec<Line<'static>> {
     let options = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES;
     let parser = Parser::new_ext(text, options);
 
@@ -224,6 +224,14 @@ fn markdown_to_lines_inner(text: &str) -> Vec<Line<'static>> {
     let mut list_depth: usize = 0;
     let mut list_index_stack: Vec<Option<u64>> = Vec::new();
     let mut link_url_stack: Vec<String> = Vec::new();
+
+    // Table state
+    let mut in_table = false;
+    let mut in_table_header = false;
+    let mut table_header: Vec<Vec<Span<'static>>> = Vec::new();
+    let mut table_rows: Vec<Vec<Vec<Span<'static>>>> = Vec::new();
+    let mut current_row: Vec<Vec<Span<'static>>> = Vec::new();
+    let mut current_cell_spans: Vec<Span<'static>> = Vec::new();
 
     for event in parser {
         match event {
@@ -352,24 +360,43 @@ fn markdown_to_lines_inner(text: &str) -> Vec<Line<'static>> {
                 style_stack.pop();
                 if let Some(url) = link_url_stack.pop() {
                     if !url.is_empty() {
-                        current_spans.push(Span::styled(
-                            format!(" ({})", url),
-                            Style::default().fg(Color::DarkGray),
-                        ));
+                        if in_table {
+                            current_cell_spans.push(Span::styled(
+                                format!(" ({})", url),
+                                Style::default().fg(Color::DarkGray),
+                            ));
+                        } else {
+                            current_spans.push(Span::styled(
+                                format!(" ({})", url),
+                                Style::default().fg(Color::DarkGray),
+                            ));
+                        }
                     }
                 }
             }
 
             Event::Code(code_text) => {
-                current_spans.push(Span::styled(
-                    format!(" {} ", code_text),
-                    Style::default().fg(Color::Yellow).bg(Color::DarkGray),
-                ));
+                if in_table {
+                    current_cell_spans.push(Span::styled(
+                        format!(" {} ", code_text),
+                        Style::default().fg(Color::Yellow).bg(Color::DarkGray),
+                    ));
+                } else {
+                    current_spans.push(Span::styled(
+                        format!(" {} ", code_text),
+                        Style::default().fg(Color::Yellow).bg(Color::DarkGray),
+                    ));
+                }
             }
 
             Event::Text(text_content) => {
                 if in_code_block {
                     code_block_content.push_str(&text_content);
+                } else if in_table {
+                    current_cell_spans.push(Span::styled(
+                        text_content.to_string(),
+                        current_style(&style_stack),
+                    ));
                 } else {
                     let parts: Vec<&str> = text_content.split('\n').collect();
                     for (i, part) in parts.iter().enumerate() {
@@ -385,13 +412,69 @@ fn markdown_to_lines_inner(text: &str) -> Vec<Line<'static>> {
             }
 
             Event::SoftBreak => {
-                current_spans.push(Span::raw(" "));
+                if in_table {
+                    current_cell_spans.push(Span::raw(" "));
+                } else {
+                    current_spans.push(Span::raw(" "));
+                }
             }
             Event::HardBreak => {
-                flush_line(&mut current_spans, &mut lines);
+                if in_table {
+                    current_cell_spans.push(Span::raw(" "));
+                } else {
+                    flush_line(&mut current_spans, &mut lines);
+                }
             }
 
-            // Skip unsupported events (tables, footnotes, etc.)
+            // -- Table events --
+            Event::Start(Tag::Table(_)) => {
+                flush_line(&mut current_spans, &mut lines);
+                in_table = true;
+                table_header.clear();
+                table_rows.clear();
+            }
+            Event::End(TagEnd::Table) => {
+                render_table(&table_header, &table_rows, width, &mut lines);
+                in_table = false;
+                lines.push(Line::from(""));
+            }
+            Event::Start(Tag::TableHead) => {
+                in_table_header = true;
+                current_row.clear();
+                // Header cells inherit Cyan+Bold as their base style
+                style_stack.push(
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                );
+            }
+            Event::End(TagEnd::TableHead) => {
+                // If TableHead acts as the row itself (no nested TableRow),
+                // flush collected cells as the header.
+                if !current_row.is_empty() && table_header.is_empty() {
+                    table_header = std::mem::take(&mut current_row);
+                }
+                in_table_header = false;
+                style_stack.pop();
+            }
+            Event::Start(Tag::TableRow) => {
+                current_row.clear();
+            }
+            Event::End(TagEnd::TableRow) => {
+                if in_table_header {
+                    table_header = std::mem::take(&mut current_row);
+                } else {
+                    table_rows.push(std::mem::take(&mut current_row));
+                }
+            }
+            Event::Start(Tag::TableCell) => {
+                current_cell_spans.clear();
+            }
+            Event::End(TagEnd::TableCell) => {
+                current_row.push(std::mem::take(&mut current_cell_spans));
+            }
+
+            // Skip unsupported events (footnotes, etc.)
             _ => {}
         }
     }
@@ -446,6 +529,182 @@ fn heading_style(level: HeadingLevel) -> Style {
 /// Visual separator line for code blocks.
 fn code_block_separator() -> Line<'static> {
     Line::from(Span::styled("───", Style::default().fg(Color::DarkGray)))
+}
+
+// ---------------------------------------------------------------------------
+// Table rendering
+// ---------------------------------------------------------------------------
+
+/// Render a collected table (header + body rows) into styled `Line`s with
+/// box-drawing borders.  Column widths are capped so the table fits within
+/// `max_width` display columns.
+fn render_table(
+    header: &[Vec<Span<'static>>],
+    rows: &[Vec<Vec<Span<'static>>>],
+    max_width: usize,
+    lines: &mut Vec<Line<'static>>,
+) {
+    let num_cols = header
+        .len()
+        .max(rows.iter().map(|r| r.len()).max().unwrap_or(0));
+    if num_cols == 0 {
+        return;
+    }
+
+    // Determine the natural display width of each column
+    let mut col_widths: Vec<usize> = vec![0; num_cols];
+    for (i, cell) in header.iter().enumerate() {
+        col_widths[i] = col_widths[i].max(cell_display_width(cell));
+    }
+    for row in rows {
+        for (i, cell) in row.iter().enumerate() {
+            if i < num_cols {
+                col_widths[i] = col_widths[i].max(cell_display_width(cell));
+            }
+        }
+    }
+
+    // Constrain column widths so the table fits within max_width.
+    // Overhead per column: "│ " (2) + " " (1) = 3, plus a trailing "│" (1).
+    let overhead = 3 * num_cols + 1;
+    let total_content: usize = col_widths.iter().sum();
+    if total_content + overhead > max_width {
+        if max_width > overhead {
+            let available = max_width - overhead;
+            if total_content > 0 {
+                for w in &mut col_widths {
+                    *w = (*w * available / total_content).max(1);
+                }
+            }
+            // max(1) can cause the sum to exceed available; trim the widest
+            // columns until the constraint is satisfied.
+            let mut sum: usize = col_widths.iter().sum();
+            while sum > available {
+                if let Some(max_w) = col_widths.iter_mut().max() {
+                    if *max_w <= 1 {
+                        break;
+                    }
+                    *max_w -= 1;
+                    sum -= 1;
+                } else {
+                    break;
+                }
+            }
+        } else {
+            // Viewport too narrow for any bordered table — give each
+            // column 1 char so content is at least partially visible.
+            col_widths.fill(1);
+        }
+    }
+
+    let border = Style::default().fg(Color::DarkGray);
+
+    // ┌───┬───┐
+    lines.push(table_border_line(&col_widths, "┌", "┬", "┐", border));
+
+    // Header row
+    if !header.is_empty() {
+        lines.push(table_data_line(header, &col_widths, border));
+        // ├───┼───┤
+        lines.push(table_border_line(&col_widths, "├", "┼", "┤", border));
+    }
+
+    // Body rows
+    for row in rows {
+        lines.push(table_data_line(row, &col_widths, border));
+    }
+
+    // └───┴───┘
+    lines.push(table_border_line(&col_widths, "└", "┴", "┘", border));
+}
+
+/// Build a horizontal border line: e.g. `┌───┬───┐`
+fn table_border_line(
+    col_widths: &[usize],
+    left: &str,
+    mid: &str,
+    right: &str,
+    style: Style,
+) -> Line<'static> {
+    let mut s = left.to_string();
+    for (i, &w) in col_widths.iter().enumerate() {
+        // +2 accounts for one space of padding on each side of the cell content
+        for _ in 0..w + 2 {
+            s.push('─');
+        }
+        if i + 1 < col_widths.len() {
+            s.push_str(mid);
+        }
+    }
+    s.push_str(right);
+    Line::from(Span::styled(s, style))
+}
+
+/// Build a data row: e.g. `│ foo │ bar │`
+///
+/// Cell spans carry their own styles (applied during markdown parsing), so
+/// no extra `text_style` parameter is needed.
+fn table_data_line(
+    cells: &[Vec<Span<'static>>],
+    col_widths: &[usize],
+    border_style: Style,
+) -> Line<'static> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let empty_cell: Vec<Span<'static>> = Vec::new();
+    for (i, &w) in col_widths.iter().enumerate() {
+        spans.push(Span::styled("│ ", border_style));
+        let cell = cells.get(i).unwrap_or(&empty_cell);
+        let clipped = clip_cell_spans(cell, w);
+        let clipped_w = cell_display_width(&clipped);
+        spans.extend(clipped);
+        let padding = w.saturating_sub(clipped_w);
+        spans.push(Span::raw(" ".repeat(padding + 1)));
+    }
+    spans.push(Span::styled("│", border_style));
+    Line::from(spans)
+}
+
+/// Total display width of a cell (sum of all span widths).
+fn cell_display_width(cell: &[Span]) -> usize {
+    cell.iter().map(|s| unicode_display_width(&s.content)).sum()
+}
+
+/// Clip a cell's spans so their combined width does not exceed `max_width`.
+fn clip_cell_spans(spans: &[Span<'static>], max_width: usize) -> Vec<Span<'static>> {
+    let mut result = Vec::new();
+    let mut remaining = max_width;
+    for span in spans {
+        if remaining == 0 {
+            break;
+        }
+        let w = unicode_display_width(&span.content);
+        if w <= remaining {
+            result.push(span.clone());
+            remaining -= w;
+        } else {
+            let mut clipped = String::new();
+            let mut col = 0;
+            for ch in span.content.chars() {
+                let ch_w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                if col + ch_w > remaining {
+                    break;
+                }
+                clipped.push(ch);
+                col += ch_w;
+            }
+            if !clipped.is_empty() {
+                result.push(Span::styled(clipped, span.style));
+            }
+            break;
+        }
+    }
+    result
+}
+
+/// Compute the display width of a string, accounting for CJK and other
+/// wide characters.
+fn unicode_display_width(s: &str) -> usize {
+    unicode_width::UnicodeWidthStr::width(s)
 }
 
 // ---------------------------------------------------------------------------
@@ -637,5 +896,147 @@ mod tests {
         let input = "some text";
         let lines = markdown_to_lines_truncated(input, W, 0);
         assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn test_table_rendering() {
+        let input = "| H1 | H2 |\n|---|---|\n| a | b |\n| c | d |";
+        let lines = markdown_to_lines(input, W);
+        let all_text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+        // Should contain box-drawing borders
+        assert!(all_text.contains('┌'), "missing top border: {all_text}");
+        assert!(all_text.contains('┘'), "missing bottom border: {all_text}");
+        // Should contain header text
+        assert!(all_text.contains("H1"), "missing header: {all_text}");
+        assert!(all_text.contains("H2"), "missing header: {all_text}");
+        // Should contain cell text
+        assert!(all_text.contains('a'), "missing cell: {all_text}");
+        assert!(all_text.contains('d'), "missing cell: {all_text}");
+        // Rows should be on separate lines (not collapsed into one)
+        assert!(
+            lines.len() >= 6,
+            "table should have at least 6 lines (borders + header + sep + 2 rows), got {}",
+            lines.len()
+        );
+    }
+
+    #[test]
+    fn test_table_with_cjk() {
+        let input = "| 名前 | 値 |\n|---|---|\n| テスト | 123 |";
+        let lines = markdown_to_lines(input, W);
+        let all_text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+        assert!(all_text.contains("名前"), "missing CJK header: {all_text}");
+        assert!(all_text.contains("テスト"), "missing CJK cell: {all_text}");
+    }
+
+    #[test]
+    fn test_table_with_inline_code() {
+        let input = "| Col |\n|---|\n| `code` |";
+        let lines = markdown_to_lines(input, W);
+        let all_text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+        assert!(
+            all_text.contains("code"),
+            "missing inline code in table: {all_text}"
+        );
+    }
+
+    #[test]
+    fn test_table_preserves_inline_styles() {
+        let input = "| Col |\n|---|\n| **bold** and `code` |";
+        let lines = markdown_to_lines(input, W);
+        let has_bold = lines.iter().any(|l| {
+            l.spans.iter().any(|s| {
+                s.content.contains("bold") && s.style.add_modifier.contains(Modifier::BOLD)
+            })
+        });
+        let has_code_style = lines.iter().any(|l| {
+            l.spans
+                .iter()
+                .any(|s| s.content.contains("code") && s.style.fg == Some(Color::Yellow))
+        });
+        assert!(has_bold, "bold style should be preserved in table cells");
+        assert!(
+            has_code_style,
+            "code style should be preserved in table cells"
+        );
+    }
+
+    #[test]
+    fn test_table_header_style() {
+        let input = "| Header |\n|---|\n| body |";
+        let lines = markdown_to_lines(input, W);
+        let has_cyan_bold = lines.iter().any(|l| {
+            l.spans.iter().any(|s| {
+                s.content.contains("Header")
+                    && s.style.fg == Some(Color::Cyan)
+                    && s.style.add_modifier.contains(Modifier::BOLD)
+            })
+        });
+        assert!(has_cyan_bold, "header should be Cyan+Bold");
+    }
+
+    #[test]
+    fn test_table_narrow_width() {
+        let input = "| Header1 | Header2 |\n|---|---|\n| cell1 | cell2 |";
+        // Very narrow width — columns must shrink to fit
+        let lines = markdown_to_lines(input, 20);
+        assert!(
+            !lines.is_empty(),
+            "should produce lines even at narrow width"
+        );
+        let all_text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
+            .collect();
+        assert!(
+            all_text.contains('┌'),
+            "should still have borders: {all_text}"
+        );
+        // No line should exceed the requested width
+        for (i, line) in lines.iter().enumerate() {
+            let line_w: usize = line
+                .spans
+                .iter()
+                .map(|s| unicode_display_width(&s.content))
+                .sum();
+            assert!(
+                line_w <= 20,
+                "line {i} exceeds width 20: {line_w} cols — {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_table_extremely_narrow_width() {
+        // 2 columns: overhead = 3*2+1 = 7.  width=8 → only 1 char available.
+        let input = "| AB | CD |\n|---|---|\n| ef | gh |";
+        let lines = markdown_to_lines(input, 8);
+        assert!(!lines.is_empty(), "should not be empty at width 8");
+        // width=4 → narrower than overhead; should still not panic.
+        let lines2 = markdown_to_lines(input, 4);
+        assert!(!lines2.is_empty(), "should not be empty at width 4");
+        // width=1 → extreme edge; must not panic.
+        let lines3 = markdown_to_lines(input, 1);
+        assert!(!lines3.is_empty(), "should not be empty at width 1");
+    }
+
+    #[test]
+    fn test_table_many_columns_narrow() {
+        // 5 columns: overhead = 3*5+1 = 16.  width=15 → less than overhead.
+        let input = "| a | b | c | d | e |\n|---|---|---|---|---|\n| 1 | 2 | 3 | 4 | 5 |";
+        let lines = markdown_to_lines(input, 15);
+        assert!(
+            !lines.is_empty(),
+            "many-column table at narrow width should not panic"
+        );
     }
 }
