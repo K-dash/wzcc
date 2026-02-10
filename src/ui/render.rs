@@ -1109,9 +1109,12 @@ fn strip_scs_sequences(bytes: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == 0x1b && i + 2 < bytes.len() && (bytes[i + 1] == b'(' || bytes[i + 1] == b')')
+        if bytes[i] == 0x1b
+            && i + 2 < bytes.len()
+            && (bytes[i + 1] == b'(' || bytes[i + 1] == b')')
+            && (0x20..=0x7E).contains(&bytes[i + 2])
         {
-            // Skip ESC, '(' or ')', and the designator character
+            // Skip ESC, '(' or ')', and the printable designator character
             i += 3;
         } else {
             out.push(bytes[i]);
@@ -1371,6 +1374,43 @@ mod tests {
             .find(|s| s.content.contains("orange"))
             .unwrap();
         assert_eq!(span.style.fg, Some(Color::Rgb(255, 128, 0)));
+    }
+
+    #[test]
+    fn test_ansi_bytes_to_lines_strips_scs_esc_b() {
+        // ESC(B (designate US-ASCII to G0) should be stripped, not rendered as "(B"
+        let bytes = b"hello\x1b(B world";
+        let lines = ansi_bytes_to_lines(bytes);
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(text, "hello world");
+        assert!(!text.contains("(B"));
+    }
+
+    #[test]
+    fn test_ansi_bytes_to_lines_strips_scs_esc_paren_zero() {
+        // ESC)0 (designate DEC Special Graphics to G1) should also be stripped
+        let bytes = b"foo\x1b)0bar";
+        let lines = ansi_bytes_to_lines(bytes);
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(text, "foobar");
+        assert!(!text.contains(")0"));
+    }
+
+    #[test]
+    fn test_strip_scs_ignores_invalid_designator() {
+        // If the 3rd byte is outside printable range, don't strip
+        let bytes = b"a\x1b(\x01z";
+        let result = strip_scs_sequences(bytes);
+        // ESC should be stripped by other means or kept, but '(' and \x01 must survive
+        assert_eq!(result, b"a\x1b(\x01z");
     }
 
     // --- convert_color tests ---
