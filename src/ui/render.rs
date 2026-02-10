@@ -15,9 +15,11 @@ use super::markdown;
 use super::session::{status_display, wrap_text_lines, ClaudeSession};
 
 /// Cache entry for history detail view: ((text_hash, width), rendered_lines).
-type HistoryLinesCache = Option<((u64, usize), Vec<Line<'static>>)>;
+pub type HistoryLinesCache = Option<((u64, usize), Vec<Line<'static>>)>;
 /// Cache entry for details preview: ((text_hash, width, max_lines), rendered_lines).
-type PreviewLinesCache = Option<((u64, usize, usize), Vec<Line<'static>>)>;
+pub type PreviewLinesCache = Option<((u64, usize, usize), Vec<Line<'static>>)>;
+/// Cache entry for live pane view: ((content_hash, width), rendered_lines).
+pub type LivePaneLinesCache = Option<((u64, usize), Vec<Line<'static>>)>;
 
 /// Compute a fast hash of a string for cache key comparison.
 fn hash_str(s: &str) -> u64 {
@@ -26,15 +28,38 @@ fn hash_str(s: &str) -> u64 {
     hasher.finish()
 }
 
-/// Sub-mode for history browsing.
+/// Detail panel display mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HistoryViewMode {
-    /// History mode is not active.
-    Off,
+pub enum DetailMode {
+    /// Normal detail view (session info + last prompt/output preview).
+    Summary,
     /// Showing the history turn list.
-    List,
+    HistoryList,
     /// Showing a single turn's detail.
-    Detail,
+    HistoryDetail,
+    /// Live pane view: raw terminal output from `wezterm cli get-text`.
+    LivePane,
+}
+
+/// Rendering context for the details panel.
+pub struct DetailsRenderCtx<'a> {
+    pub sessions: &'a [ClaudeSession],
+    pub selected: Option<usize>,
+    pub input_mode: bool,
+    pub input_buffer: &'a str,
+    pub cursor_position: usize,
+    pub detail_mode: DetailMode,
+    pub history_turns: &'a [ConversationTurn],
+    pub history_index: usize,
+    pub history_scroll_offset: &'a mut usize,
+    pub history_list_state: &'a mut ListState,
+    pub history_timestamps: &'a [Option<SystemTime>],
+    pub cached_history_lines: &'a mut HistoryLinesCache,
+    pub cached_preview_lines: &'a mut PreviewLinesCache,
+    pub live_pane_bytes: Option<&'a [u8]>,
+    pub live_pane_scroll_offset: &'a mut usize,
+    pub cached_live_pane_lines: &'a mut LivePaneLinesCache,
+    pub live_pane_error: bool,
 }
 
 /// Format a duration as a relative time string (e.g., "5s", "2m", "1h", "3d").
@@ -267,32 +292,10 @@ pub fn render_list(
 }
 
 /// Render the details panel.
-#[allow(clippy::too_many_arguments)]
-pub fn render_details(
-    f: &mut ratatui::Frame,
-    area: Rect,
-    sessions: &[ClaudeSession],
-    selected: Option<usize>,
-    input_mode: bool,
-    input_buffer: &str,
-    cursor_position: usize,
-    history_view: HistoryViewMode,
-    history_turns: &[ConversationTurn],
-    history_index: usize,
-    history_scroll_offset: &mut usize,
-    history_list_state: &mut ListState,
-    history_timestamps: &[Option<SystemTime>],
-    cached_history_lines: &mut HistoryLinesCache,
-    cached_preview_lines: &mut PreviewLinesCache,
-) {
-    // History browsing mode dispatch
-    if matches!(
-        history_view,
-        HistoryViewMode::List | HistoryViewMode::Detail
-    ) && !history_turns.is_empty()
-    {
-        // Split area: compact session info header + history content
-        let content_area = if let Some(session) = selected.and_then(|i| sessions.get(i)) {
+pub fn render_details(f: &mut ratatui::Frame, area: Rect, ctx: &mut DetailsRenderCtx<'_>) {
+    // Live pane view dispatch
+    if ctx.detail_mode == DetailMode::LivePane {
+        let content_area = if let Some(session) = ctx.selected.and_then(|i| ctx.sessions.get(i)) {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Length(2), Constraint::Min(0)])
@@ -303,24 +306,53 @@ pub fn render_details(
             area
         };
 
-        match history_view {
-            HistoryViewMode::List => {
+        render_live_pane(
+            f,
+            content_area,
+            ctx.live_pane_bytes,
+            ctx.live_pane_scroll_offset,
+            ctx.cached_live_pane_lines,
+            ctx.live_pane_error,
+        );
+        return;
+    }
+
+    // History browsing mode dispatch
+    if matches!(
+        ctx.detail_mode,
+        DetailMode::HistoryList | DetailMode::HistoryDetail
+    ) && !ctx.history_turns.is_empty()
+    {
+        // Split area: compact session info header + history content
+        let content_area = if let Some(session) = ctx.selected.and_then(|i| ctx.sessions.get(i)) {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(2), Constraint::Min(0)])
+                .split(area);
+            render_session_info_header(f, chunks[0], session);
+            chunks[1]
+        } else {
+            area
+        };
+
+        match ctx.detail_mode {
+            DetailMode::HistoryList => {
                 render_history_list(
                     f,
                     content_area,
-                    history_turns,
-                    history_list_state,
-                    history_timestamps,
+                    ctx.history_turns,
+                    ctx.history_list_state,
+                    ctx.history_timestamps,
                 );
             }
-            HistoryViewMode::Detail => {
+            DetailMode::HistoryDetail => {
                 render_history_details(
                     f,
                     content_area,
-                    history_turns,
-                    history_index,
-                    history_scroll_offset,
-                    cached_history_lines,
+                    ctx.history_turns,
+                    ctx.history_index,
+                    ctx.history_scroll_offset,
+                    ctx.cached_history_lines,
                 );
             }
             _ => unreachable!(),
@@ -328,8 +360,8 @@ pub fn render_details(
         return;
     }
 
-    let text = if let Some(i) = selected {
-        if let Some(session) = sessions.get(i) {
+    let text = if let Some(i) = ctx.selected {
+        if let Some(session) = ctx.sessions.get(i) {
             let pane = &session.pane;
 
             // Quick select number display (1-9 or none)
@@ -452,7 +484,7 @@ pub fn render_details(
                     let text_hash = hash_str(output);
                     let cache_key = (text_hash, inner_width, preview_lines);
                     let output_lines =
-                        if let Some((cached_key, cached)) = cached_preview_lines.as_ref() {
+                        if let Some((cached_key, cached)) = ctx.cached_preview_lines.as_ref() {
                             if *cached_key == cache_key {
                                 cached.clone()
                             } else {
@@ -461,7 +493,7 @@ pub fn render_details(
                                     inner_width,
                                     preview_lines,
                                 );
-                                *cached_preview_lines = Some((cache_key, rendered.clone()));
+                                *ctx.cached_preview_lines = Some((cache_key, rendered.clone()));
                                 rendered
                             }
                         } else {
@@ -470,7 +502,7 @@ pub fn render_details(
                                 inner_width,
                                 preview_lines,
                             );
-                            *cached_preview_lines = Some((cache_key, rendered.clone()));
+                            *ctx.cached_preview_lines = Some((cache_key, rendered.clone()));
                             rendered
                         };
                     lines.extend(output_lines);
@@ -485,7 +517,7 @@ pub fn render_details(
         vec![Line::from("No sessions")]
     };
 
-    if input_mode {
+    if ctx.input_mode {
         // Inner width of the input box (inside borders)
         let inner_width = area.width.saturating_sub(2) as usize;
         let prefix_width: usize = 2; // "> " or "  "
@@ -497,13 +529,13 @@ pub fn render_details(
         let mut cursor_visual_col: u16 = prefix_width as u16;
         let mut global_byte = 0usize;
 
-        let logical_lines: Vec<&str> = input_buffer.split('\n').collect();
+        let logical_lines: Vec<&str> = ctx.input_buffer.split('\n').collect();
         for (li, logical_line) in logical_lines.iter().enumerate() {
             let prefix_str = if li == 0 { "> " } else { "  " };
 
             if logical_line.is_empty() {
                 // Cursor on empty line
-                if cursor_position == global_byte {
+                if ctx.cursor_position == global_byte {
                     cursor_visual_row = visual_lines.len() as u16;
                     cursor_visual_col = prefix_width as u16;
                 }
@@ -540,7 +572,7 @@ pub fn render_details(
 
                     // Check if cursor is at this character
                     let byte_in_buf = global_byte + ci;
-                    if byte_in_buf == cursor_position {
+                    if byte_in_buf == ctx.cursor_position {
                         cursor_visual_row = visual_lines.len() as u16;
                         cursor_visual_col = (prefix_width + col_w) as u16;
                     }
@@ -558,7 +590,7 @@ pub fn render_details(
 
                 // Cursor at end of this logical line
                 let end_byte = global_byte + logical_line.len();
-                if cursor_position == end_byte {
+                if ctx.cursor_position == end_byte {
                     cursor_visual_row = (visual_lines.len() - 1) as u16;
                     cursor_visual_col = (prefix_width + col_w) as u16;
                 }
@@ -582,8 +614,9 @@ pub fn render_details(
         f.render_widget(paragraph, chunks[0]);
 
         // Render input field in bottom area
-        let pane_id = selected
-            .and_then(|i| sessions.get(i))
+        let pane_id = ctx
+            .selected
+            .and_then(|i| ctx.sessions.get(i))
             .map(|s| s.pane.pane_id)
             .unwrap_or(0);
 
@@ -829,7 +862,7 @@ pub fn render_footer(
     f: &mut ratatui::Frame,
     area: Rect,
     input_mode: bool,
-    history_view: HistoryViewMode,
+    detail_mode: DetailMode,
     toast: Option<&super::toast::Toast>,
     kill_confirm: Option<&(u32, String)>,
     add_pane_pending: Option<&(u32, String)>,
@@ -906,7 +939,7 @@ pub fn render_footer(
         return;
     }
 
-    let help_text = if history_view == HistoryViewMode::List {
+    let help_text = if detail_mode == DetailMode::HistoryList {
         Line::from(vec![
             Span::styled("[jk]", Style::default().fg(Color::Yellow)),
             Span::raw("Select "),
@@ -921,7 +954,7 @@ pub fn render_footer(
             Span::styled("[Esc/q]", Style::default().fg(Color::Yellow)),
             Span::raw("Back"),
         ])
-    } else if history_view == HistoryViewMode::Detail {
+    } else if detail_mode == DetailMode::HistoryDetail {
         Line::from(vec![
             Span::styled("[jk]", Style::default().fg(Color::Yellow)),
             Span::raw("Scroll "),
@@ -934,6 +967,21 @@ pub fn render_footer(
             Span::styled("[G]", Style::default().fg(Color::Yellow)),
             Span::raw("Bottom "),
             Span::styled("[Esc/q]", Style::default().fg(Color::Yellow)),
+            Span::raw("Back"),
+        ])
+    } else if detail_mode == DetailMode::LivePane {
+        Line::from(vec![
+            Span::styled("[jk]", Style::default().fg(Color::Green)),
+            Span::raw("Scroll "),
+            Span::styled("[^D/^U]", Style::default().fg(Color::Green)),
+            Span::raw("HalfPage "),
+            Span::styled("[y]", Style::default().fg(Color::Green)),
+            Span::raw("Yank "),
+            Span::styled("[gg]", Style::default().fg(Color::Green)),
+            Span::raw("Top "),
+            Span::styled("[G]", Style::default().fg(Color::Green)),
+            Span::raw("Bottom "),
+            Span::styled("[Esc/q]", Style::default().fg(Color::Green)),
             Span::raw("Back"),
         ])
     } else if input_mode {
@@ -965,6 +1013,8 @@ pub fn render_footer(
             Span::raw("Resize "),
             Span::styled("[H]", Style::default().fg(Color::Cyan)),
             Span::raw("History "),
+            Span::styled("[v]", Style::default().fg(Color::Cyan)),
+            Span::raw("Live "),
             Span::styled("[r]", Style::default().fg(Color::Cyan)),
             Span::raw("Refresh "),
             Span::styled("[x]", Style::default().fg(Color::Cyan)),
@@ -979,6 +1029,150 @@ pub fn render_footer(
     let paragraph = Paragraph::new(help_text).style(Style::default().fg(Color::DarkGray));
 
     f.render_widget(paragraph, area);
+}
+
+/// Render the live pane view in the details panel area.
+fn render_live_pane(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    raw_bytes: Option<&[u8]>,
+    scroll_offset: &mut usize,
+    cached_lines: &mut LivePaneLinesCache,
+    has_error: bool,
+) {
+    let inner_width = (area.width.saturating_sub(2)) as usize;
+
+    let mut lines: Vec<Line<'static>> = if let Some(bytes) = raw_bytes {
+        // Check cache: use content hash + width as cache key
+        let content_hash = hash_bytes(bytes);
+        let cache_key = (content_hash, inner_width);
+
+        if let Some((cached_key, cached)) = cached_lines.as_ref() {
+            if *cached_key == cache_key {
+                cached.clone()
+            } else {
+                let rendered = ansi_bytes_to_lines(bytes);
+                *cached_lines = Some((cache_key, rendered.clone()));
+                rendered
+            }
+        } else {
+            let rendered = ansi_bytes_to_lines(bytes);
+            *cached_lines = Some((cache_key, rendered.clone()));
+            rendered
+        }
+    } else {
+        vec![Line::from(Span::styled(
+            "Loading...",
+            Style::default().fg(Color::DarkGray),
+        ))]
+    };
+
+    // Append warning line if polling is failing
+    if has_error {
+        lines.push(Line::from(Span::styled(
+            "⚠ Pane unavailable (retrying...)",
+            Style::default().fg(Color::Yellow),
+        )));
+    }
+
+    // Clamp scroll offset
+    let content_height = lines.len();
+    let viewport_height = area.height.saturating_sub(2) as usize;
+    let max_scroll = content_height.saturating_sub(viewport_height);
+    *scroll_offset = (*scroll_offset).min(max_scroll);
+    let clamped_offset = (*scroll_offset).min(u16::MAX as usize) as u16;
+
+    let border_color = if has_error {
+        Color::Yellow
+    } else {
+        Color::Green
+    };
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Live Pane ")
+                .border_style(Style::default().fg(border_color)),
+        )
+        .scroll((clamped_offset, 0));
+
+    f.render_widget(paragraph, area);
+}
+
+/// Convert ANSI-escaped bytes to ratatui Lines using ansi-to-tui.
+///
+/// `ansi-to-tui` depends on `ratatui-core` which defines its own `Line`/`Span`/`Style`
+/// types, separate from `ratatui 0.29`. We bridge the gap by converting field-by-field.
+fn ansi_bytes_to_lines(bytes: &[u8]) -> Vec<Line<'static>> {
+    use ansi_to_tui::IntoText as _;
+    match bytes.into_text() {
+        Ok(text) => text
+            .lines
+            .into_iter()
+            .map(|line| {
+                let spans: Vec<Span<'static>> = line
+                    .spans
+                    .into_iter()
+                    .map(|span| Span::styled(span.content.into_owned(), convert_style(span.style)))
+                    .collect();
+                Line::from(spans)
+            })
+            .collect(),
+        Err(_) => {
+            // Fallback: show as plain text
+            let s = String::from_utf8_lossy(bytes);
+            s.lines().map(|l| Line::from(l.to_string())).collect()
+        }
+    }
+}
+
+/// Convert a `ratatui_core::Style` to a `ratatui::style::Style`.
+fn convert_style(src: ratatui_core::style::Style) -> Style {
+    let mut dst = Style::default();
+    if let Some(fg) = src.fg {
+        dst = dst.fg(convert_color(fg));
+    }
+    if let Some(bg) = src.bg {
+        dst = dst.bg(convert_color(bg));
+    }
+    let add_bits = src.add_modifier.bits();
+    let sub_bits = src.sub_modifier.bits();
+    dst = dst.add_modifier(Modifier::from_bits_truncate(add_bits));
+    dst = dst.remove_modifier(Modifier::from_bits_truncate(sub_bits));
+    dst
+}
+
+/// Convert a `ratatui_core::Color` to a `ratatui::style::Color`.
+fn convert_color(c: ratatui_core::style::Color) -> Color {
+    use ratatui_core::style::Color as C;
+    match c {
+        C::Reset => Color::Reset,
+        C::Black => Color::Black,
+        C::Red => Color::Red,
+        C::Green => Color::Green,
+        C::Yellow => Color::Yellow,
+        C::Blue => Color::Blue,
+        C::Magenta => Color::Magenta,
+        C::Cyan => Color::Cyan,
+        C::Gray => Color::Gray,
+        C::DarkGray => Color::DarkGray,
+        C::LightRed => Color::LightRed,
+        C::LightGreen => Color::LightGreen,
+        C::LightYellow => Color::LightYellow,
+        C::LightBlue => Color::LightBlue,
+        C::LightMagenta => Color::LightMagenta,
+        C::LightCyan => Color::LightCyan,
+        C::White => Color::White,
+        C::Rgb(r, g, b) => Color::Rgb(r, g, b),
+        C::Indexed(i) => Color::Indexed(i),
+    }
+}
+
+/// Compute a fast hash of a byte slice for cache key comparison.
+fn hash_bytes(bytes: &[u8]) -> u64 {
+    let mut hasher = std::hash::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
 }
 
 #[cfg(test)]
@@ -1081,5 +1275,131 @@ mod tests {
     fn test_elapsed_time_color_future() {
         let time = SystemTime::now() + Duration::from_secs(100);
         assert_eq!(elapsed_time_color(&time), Color::Green);
+    }
+
+    // --- ansi_bytes_to_lines tests ---
+
+    #[test]
+    fn test_ansi_bytes_to_lines_plain_text() {
+        let bytes = b"hello\nworld";
+        let lines = ansi_bytes_to_lines(bytes);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].spans.len(), 1);
+        assert_eq!(lines[0].spans[0].content.as_ref(), "hello");
+        assert_eq!(lines[1].spans[0].content.as_ref(), "world");
+    }
+
+    #[test]
+    fn test_ansi_bytes_to_lines_with_color() {
+        // Red foreground: \x1b[31m ... \x1b[0m
+        let bytes = b"\x1b[31mred text\x1b[0m";
+        let lines = ansi_bytes_to_lines(bytes);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0]
+            .spans
+            .iter()
+            .any(|s| s.content.contains("red text")));
+        // Verify the span has red foreground
+        let red_span = lines[0]
+            .spans
+            .iter()
+            .find(|s| s.content.contains("red text"))
+            .unwrap();
+        assert_eq!(red_span.style.fg, Some(Color::Red));
+    }
+
+    #[test]
+    fn test_ansi_bytes_to_lines_empty() {
+        let bytes = b"";
+        let lines = ansi_bytes_to_lines(bytes);
+        // Empty input should produce one empty line
+        assert!(lines.len() <= 1);
+    }
+
+    #[test]
+    fn test_ansi_bytes_to_lines_bold_modifier() {
+        // Bold: \x1b[1m ... \x1b[0m
+        let bytes = b"\x1b[1mbold text\x1b[0m";
+        let lines = ansi_bytes_to_lines(bytes);
+        assert_eq!(lines.len(), 1);
+        let bold_span = lines[0]
+            .spans
+            .iter()
+            .find(|s| s.content.contains("bold text"))
+            .unwrap();
+        assert!(bold_span.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn test_ansi_bytes_to_lines_rgb_color() {
+        // RGB color: \x1b[38;2;255;128;0m (orange foreground)
+        let bytes = b"\x1b[38;2;255;128;0morange\x1b[0m";
+        let lines = ansi_bytes_to_lines(bytes);
+        assert_eq!(lines.len(), 1);
+        let span = lines[0]
+            .spans
+            .iter()
+            .find(|s| s.content.contains("orange"))
+            .unwrap();
+        assert_eq!(span.style.fg, Some(Color::Rgb(255, 128, 0)));
+    }
+
+    // --- convert_color tests ---
+
+    #[test]
+    fn test_convert_color_named() {
+        use ratatui_core::style::Color as C;
+        assert_eq!(convert_color(C::Red), Color::Red);
+        assert_eq!(convert_color(C::Blue), Color::Blue);
+        assert_eq!(convert_color(C::Reset), Color::Reset);
+    }
+
+    #[test]
+    fn test_convert_color_rgb() {
+        use ratatui_core::style::Color as C;
+        assert_eq!(convert_color(C::Rgb(10, 20, 30)), Color::Rgb(10, 20, 30));
+    }
+
+    #[test]
+    fn test_convert_color_indexed() {
+        use ratatui_core::style::Color as C;
+        assert_eq!(convert_color(C::Indexed(42)), Color::Indexed(42));
+    }
+
+    // --- convert_style tests ---
+
+    #[test]
+    fn test_convert_style_default() {
+        let src = ratatui_core::style::Style::default();
+        let dst = convert_style(src);
+        assert_eq!(dst, Style::default());
+    }
+
+    #[test]
+    fn test_convert_style_with_colors_and_modifiers() {
+        let src = ratatui_core::style::Style::new()
+            .fg(ratatui_core::style::Color::Green)
+            .bg(ratatui_core::style::Color::Black)
+            .add_modifier(
+                ratatui_core::style::Modifier::BOLD | ratatui_core::style::Modifier::ITALIC,
+            );
+        let dst = convert_style(src);
+        assert_eq!(dst.fg, Some(Color::Green));
+        assert_eq!(dst.bg, Some(Color::Black));
+        assert!(dst.add_modifier.contains(Modifier::BOLD));
+        assert!(dst.add_modifier.contains(Modifier::ITALIC));
+    }
+
+    // --- hash_bytes tests ---
+
+    #[test]
+    fn test_hash_bytes_deterministic() {
+        let data = b"hello world";
+        assert_eq!(hash_bytes(data), hash_bytes(data));
+    }
+
+    #[test]
+    fn test_hash_bytes_different_input() {
+        assert_ne!(hash_bytes(b"hello"), hash_bytes(b"world"));
     }
 }

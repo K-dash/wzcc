@@ -31,13 +31,24 @@ use super::event::{
     is_down_key, is_enter_key, is_quit_key, is_refresh_key, is_up_key, Event, EventHandler,
 };
 use super::input_buffer::InputBuffer;
-use super::render::{render_details, render_footer, render_list, HistoryViewMode};
+use super::render::{
+    render_details, render_footer, render_list, DetailMode, DetailsRenderCtx, LivePaneLinesCache,
+};
 use super::session::ClaudeSession;
 use super::toast::Toast;
 
 /// Debounce interval (ms) for transcript file refreshes.
 /// 200ms keeps the status responsive while coalescing burst writes during streaming.
 const TRANSCRIPT_DEBOUNCE_MS: u64 = 200;
+
+/// Polling interval (ms) for live pane content refresh.
+const LIVE_PANE_POLL_MS: u64 = 300;
+
+/// Circuit-breaker: seconds to skip polling after a failure.
+const LIVE_PANE_COOLDOWN_SECS: u64 = 5;
+
+/// Number of consecutive poll failures before auto-exiting live pane view.
+const LIVE_PANE_MAX_FAILURES: u32 = 3;
 
 /// TUI application
 pub struct App {
@@ -81,8 +92,8 @@ pub struct App {
     kill_confirm: Option<(u32, String)>,
     /// Add pane mode: stores (pane_id, cwd) for split direction selection
     add_pane_pending: Option<(u32, String)>,
-    /// History browsing view mode (Off / List / Detail)
-    history_view: HistoryViewMode,
+    /// Detail panel display mode
+    detail_mode: DetailMode,
     /// Conversation turns for history browsing (newest first)
     history_turns: Vec<ConversationTurn>,
     /// Selection state for history list view
@@ -97,6 +108,16 @@ pub struct App {
     cached_history_lines: Option<((u64, usize), Vec<ratatui::text::Line<'static>>)>,
     /// Cached rendered lines for details preview: ((text_hash, width, max_lines), lines)
     cached_preview_lines: Option<((u64, usize, usize), Vec<ratatui::text::Line<'static>>)>,
+    /// Cached raw ANSI bytes from wezterm cli get-text --escapes
+    live_pane_bytes: Option<Vec<u8>>,
+    /// Scroll offset within live pane view (line-level)
+    live_pane_scroll_offset: usize,
+    /// Cached rendered lines for live pane view
+    cached_live_pane_lines: LivePaneLinesCache,
+    /// Timestamp of the last live pane content fetch
+    last_live_pane_fetch: Instant,
+    /// Consecutive poll failure count (circuit-breaker)
+    live_pane_poll_failures: u32,
     /// User configuration loaded from ~/.config/wzcc/config.toml
     config: Config,
     /// Git branch cache (30s TTL)
@@ -147,7 +168,7 @@ impl App {
             toast,
             kill_confirm: None,
             add_pane_pending: None,
-            history_view: HistoryViewMode::Off,
+            detail_mode: DetailMode::Summary,
             history_turns: Vec::new(),
             history_list_state: ListState::default(),
             history_index: 0,
@@ -155,6 +176,11 @@ impl App {
             history_timestamps: Vec::new(),
             cached_history_lines: None,
             cached_preview_lines: None,
+            live_pane_bytes: None,
+            live_pane_scroll_offset: 0,
+            cached_live_pane_lines: None,
+            last_live_pane_fetch: Instant::now(),
+            live_pane_poll_failures: 0,
             config,
             git_branch_cache: GitBranchCache::new(30),
             last_transcript_refresh: Instant::now(),
@@ -319,6 +345,18 @@ impl App {
 
         self.dirty = true;
 
+        // If in live pane view, check if the selected session's pane_id changed
+        if self.detail_mode == DetailMode::LivePane {
+            let new_pane_id = self
+                .list_state
+                .selected()
+                .and_then(|i| self.sessions.get(i))
+                .map(|s| s.pane.pane_id);
+            if new_pane_id != selected_pane_id {
+                self.exit_live_pane_view();
+            }
+        }
+
         Ok(())
     }
 
@@ -340,6 +378,7 @@ impl App {
         };
 
         self.list_state.select(Some(i));
+        self.exit_live_pane_view();
         self.dirty = true;
     }
 
@@ -361,6 +400,7 @@ impl App {
         };
 
         self.list_state.select(Some(i));
+        self.exit_live_pane_view();
         self.dirty = true;
     }
 
@@ -368,6 +408,7 @@ impl App {
     pub fn select_first(&mut self) {
         if !self.sessions.is_empty() {
             self.list_state.select(Some(0));
+            self.exit_live_pane_view();
             self.dirty = true;
         }
     }
@@ -376,6 +417,7 @@ impl App {
     pub fn select_last(&mut self) {
         if !self.sessions.is_empty() {
             self.list_state.select(Some(self.sessions.len() - 1));
+            self.exit_live_pane_view();
             self.dirty = true;
         }
     }
@@ -659,6 +701,10 @@ impl App {
 
     /// Enter history list view for the selected session
     fn enter_history_mode(&mut self) {
+        // Exit live pane view if active
+        if self.detail_mode == DetailMode::LivePane {
+            self.exit_live_pane_view();
+        }
         if let Some(i) = self.list_state.selected() {
             if let Some(session) = self.sessions.get(i) {
                 if let Some(path) = &session.transcript_path {
@@ -679,7 +725,7 @@ impl App {
                             self.history_list_state.select(Some(0));
                             self.history_index = 0;
                             self.history_scroll_offset = 0;
-                            self.history_view = HistoryViewMode::List;
+                            self.detail_mode = DetailMode::HistoryList;
                             self.pending_g = false;
                             self.dirty = true;
                             self.needs_full_redraw = true;
@@ -703,7 +749,7 @@ impl App {
 
     /// Exit history mode entirely (back to normal)
     fn exit_history_mode(&mut self) {
-        self.history_view = HistoryViewMode::Off;
+        self.detail_mode = DetailMode::Summary;
         self.history_turns.clear();
         self.history_list_state.select(None);
         self.history_index = 0;
@@ -720,7 +766,7 @@ impl App {
             if i < self.history_turns.len() {
                 self.history_index = i;
                 self.history_scroll_offset = 0;
-                self.history_view = HistoryViewMode::Detail;
+                self.detail_mode = DetailMode::HistoryDetail;
                 self.pending_g = false;
                 self.dirty = true;
                 self.needs_full_redraw = true;
@@ -730,12 +776,131 @@ impl App {
 
     /// Return from detail view to list view
     fn exit_history_detail(&mut self) {
-        self.history_view = HistoryViewMode::List;
+        self.detail_mode = DetailMode::HistoryList;
         self.history_list_state.select(Some(self.history_index));
         self.history_scroll_offset = 0;
         self.pending_g = false;
         self.dirty = true;
         self.needs_full_redraw = true;
+    }
+
+    /// Enter live pane view for the selected session.
+    fn enter_live_pane_view(&mut self) {
+        if let Some(i) = self.list_state.selected() {
+            if self.sessions.get(i).is_some() {
+                // Exit history mode if active
+                if self.detail_mode != DetailMode::Summary {
+                    self.exit_history_mode();
+                }
+                self.detail_mode = DetailMode::LivePane;
+                self.live_pane_bytes = None;
+                self.live_pane_scroll_offset = 0;
+                self.cached_live_pane_lines = None;
+                self.live_pane_poll_failures = 0;
+                // Force immediate first fetch
+                self.last_live_pane_fetch =
+                    Instant::now() - Duration::from_secs(LIVE_PANE_COOLDOWN_SECS + 1);
+                self.pending_g = false;
+                self.dirty = true;
+                self.needs_full_redraw = true;
+            }
+        }
+    }
+
+    /// Exit live pane view back to normal detail view.
+    /// No-op if not currently in live pane view.
+    fn exit_live_pane_view(&mut self) {
+        if self.detail_mode != DetailMode::LivePane {
+            return;
+        }
+        self.detail_mode = DetailMode::Summary;
+        self.live_pane_bytes = None;
+        self.live_pane_scroll_offset = 0;
+        self.cached_live_pane_lines = None;
+        self.live_pane_poll_failures = 0;
+        self.pending_g = false;
+        self.dirty = true;
+        self.needs_full_redraw = true;
+    }
+
+    /// Fetch live pane content from wezterm if enough time has elapsed.
+    fn poll_live_pane_content(&mut self) {
+        if self.detail_mode != DetailMode::LivePane {
+            return;
+        }
+
+        let elapsed = self.last_live_pane_fetch.elapsed();
+
+        // Circuit-breaker: skip polling after failures
+        if self.live_pane_poll_failures > 0
+            && elapsed < Duration::from_secs(LIVE_PANE_COOLDOWN_SECS)
+        {
+            return;
+        }
+
+        if elapsed < Duration::from_millis(LIVE_PANE_POLL_MS) {
+            return;
+        }
+
+        self.last_live_pane_fetch = Instant::now();
+
+        if let Some(i) = self.list_state.selected() {
+            if let Some(session) = self.sessions.get(i) {
+                let pane_id = session.pane.pane_id;
+                match WeztermCli::get_text(pane_id) {
+                    Ok(bytes) => {
+                        self.live_pane_poll_failures = 0;
+                        // Only mark dirty if content actually changed (byte equality)
+                        let changed = self.live_pane_bytes.as_ref() != Some(&bytes);
+                        if changed {
+                            self.live_pane_bytes = Some(bytes);
+                            self.cached_live_pane_lines = None; // Invalidate render cache
+                            self.dirty = true;
+                        }
+                    }
+                    Err(_) => {
+                        self.live_pane_poll_failures += 1;
+                        self.dirty = true; // Show warning in render
+                        if self.live_pane_poll_failures >= LIVE_PANE_MAX_FAILURES {
+                            self.toast =
+                                Some(Toast::error("Pane unavailable, exiting live view".into()));
+                            self.exit_live_pane_view();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Compute half-page scroll amount based on terminal height.
+    fn viewport_half_height(&self) -> usize {
+        // terminal height minus header(1) + footer(1) + borders(2) + session header(2)
+        let (_, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+        let usable = rows.saturating_sub(6) as usize;
+        (usable / 2).max(1)
+    }
+
+    /// Yank (copy) the live pane content to clipboard (plain text, no ANSI).
+    fn yank_live_pane_content(&mut self) {
+        if let Some(i) = self.list_state.selected() {
+            if let Some(session) = self.sessions.get(i) {
+                let pane_id = session.pane.pane_id;
+                match WeztermCli::get_text_plain(pane_id) {
+                    Ok(text) => match Self::copy_to_clipboard(&text) {
+                        Ok(()) => {
+                            self.toast = Some(Toast::success("Copied pane output".into()));
+                        }
+                        Err(e) => {
+                            self.toast = Some(Toast::error(format!("Copy failed: {}", e)));
+                        }
+                    },
+                    Err(e) => {
+                        self.toast = Some(Toast::error(format!("Failed to get text: {}", e)));
+                    }
+                }
+                self.dirty = true;
+            }
+        }
     }
 
     /// Run TUI
@@ -911,7 +1076,7 @@ impl App {
                         }
                     }
                 }
-                Event::Key(key) if self.history_view == HistoryViewMode::List => {
+                Event::Key(key) if self.detail_mode == DetailMode::HistoryList => {
                     // History list view key handling
                     match key.code {
                         KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('H') => {
@@ -971,7 +1136,7 @@ impl App {
                         }
                     }
                 }
-                Event::Key(key) if self.history_view == HistoryViewMode::Detail => {
+                Event::Key(key) if self.detail_mode == DetailMode::HistoryDetail => {
                     // History detail view key handling
                     match key.code {
                         KeyCode::Esc | KeyCode::Char('q') => {
@@ -999,15 +1164,17 @@ impl App {
                         KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             // Ctrl+D -> scroll down half page
                             self.pending_g = false;
+                            let half = self.viewport_half_height();
                             self.history_scroll_offset =
-                                self.history_scroll_offset.saturating_add(10);
+                                self.history_scroll_offset.saturating_add(half);
                             self.dirty = true;
                         }
                         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             // Ctrl+U -> scroll up half page
                             self.pending_g = false;
+                            let half = self.viewport_half_height();
                             self.history_scroll_offset =
-                                self.history_scroll_offset.saturating_sub(10);
+                                self.history_scroll_offset.saturating_sub(half);
                             self.dirty = true;
                         }
                         KeyCode::Char('g') => {
@@ -1030,6 +1197,61 @@ impl App {
                             // y -> yank current turn's response to clipboard
                             self.pending_g = false;
                             self.yank_history_output(self.history_index);
+                        }
+                        _ => {
+                            self.pending_g = false;
+                        }
+                    }
+                }
+                Event::Key(key) if self.detail_mode == DetailMode::LivePane => {
+                    // Live pane view key handling
+                    match key.code {
+                        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('v') => {
+                            self.exit_live_pane_view();
+                        }
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            self.pending_g = false;
+                            self.live_pane_scroll_offset =
+                                self.live_pane_scroll_offset.saturating_add(1);
+                            self.dirty = true;
+                        }
+                        KeyCode::Char('k') | KeyCode::Up => {
+                            self.pending_g = false;
+                            self.live_pane_scroll_offset =
+                                self.live_pane_scroll_offset.saturating_sub(1);
+                            self.dirty = true;
+                        }
+                        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            self.pending_g = false;
+                            let half_page = self.viewport_half_height();
+                            self.live_pane_scroll_offset =
+                                self.live_pane_scroll_offset.saturating_add(half_page);
+                            self.dirty = true;
+                        }
+                        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            self.pending_g = false;
+                            let half_page = self.viewport_half_height();
+                            self.live_pane_scroll_offset =
+                                self.live_pane_scroll_offset.saturating_sub(half_page);
+                            self.dirty = true;
+                        }
+                        KeyCode::Char('g') => {
+                            if self.pending_g {
+                                self.live_pane_scroll_offset = 0;
+                                self.dirty = true;
+                                self.pending_g = false;
+                            } else {
+                                self.pending_g = true;
+                            }
+                        }
+                        KeyCode::Char('G') => {
+                            self.pending_g = false;
+                            self.live_pane_scroll_offset = usize::MAX;
+                            self.dirty = true;
+                        }
+                        KeyCode::Char('y') => {
+                            self.pending_g = false;
+                            self.yank_live_pane_content();
                         }
                         _ => {
                             self.pending_g = false;
@@ -1090,6 +1312,9 @@ impl App {
                     } else if key.code == KeyCode::Char('H') {
                         // Enter history browsing mode
                         self.enter_history_mode();
+                    } else if key.code == KeyCode::Char('v') {
+                        // Enter live pane view
+                        self.enter_live_pane_view();
                     } else if key.code == KeyCode::Char('a') {
                         // Enter add-pane mode (split direction selection)
                         self.request_add_pane();
@@ -1108,6 +1333,7 @@ impl App {
                                 let index = (digit - 1) as usize;
                                 if index < self.sessions.len() {
                                     self.list_state.select(Some(index));
+                                    self.exit_live_pane_view();
                                     self.dirty = true;
                                     // Also jump to the session
                                     let _ = self.jump_to_selected();
@@ -1117,9 +1343,9 @@ impl App {
                     }
                 }
                 Event::Mouse(mouse)
-                    if self.input_mode || self.history_view != HistoryViewMode::Off =>
+                    if self.input_mode || self.detail_mode != DetailMode::Summary =>
                 {
-                    // Ignore mouse in input mode and history mode
+                    // Ignore mouse in input mode, history mode, and live pane mode
                     let _ = mouse;
                 }
                 Event::Mouse(mouse) => {
@@ -1172,6 +1398,9 @@ impl App {
                     self.dirty = true;
                 }
                 Event::Tick => {
+                    // Poll live pane content if active
+                    self.poll_live_pane_content();
+
                     // Advance animation frame for Processing indicator
                     self.animation_frame = (self.animation_frame + 1) % 4;
 
@@ -1274,30 +1503,33 @@ impl App {
         );
 
         // Render details
-        render_details(
-            f,
-            chunks[1],
-            &self.sessions,
-            self.list_state.selected(),
-            self.input_mode,
-            self.input_buffer.as_str(),
-            self.input_buffer.cursor(),
-            self.history_view,
-            &self.history_turns,
-            self.history_index,
-            &mut self.history_scroll_offset,
-            &mut self.history_list_state,
-            &self.history_timestamps,
-            &mut self.cached_history_lines,
-            &mut self.cached_preview_lines,
-        );
+        let mut ctx = DetailsRenderCtx {
+            sessions: &self.sessions,
+            selected: self.list_state.selected(),
+            input_mode: self.input_mode,
+            input_buffer: self.input_buffer.as_str(),
+            cursor_position: self.input_buffer.cursor(),
+            detail_mode: self.detail_mode,
+            history_turns: &self.history_turns,
+            history_index: self.history_index,
+            history_scroll_offset: &mut self.history_scroll_offset,
+            history_list_state: &mut self.history_list_state,
+            history_timestamps: &self.history_timestamps,
+            cached_history_lines: &mut self.cached_history_lines,
+            cached_preview_lines: &mut self.cached_preview_lines,
+            live_pane_bytes: self.live_pane_bytes.as_deref(),
+            live_pane_scroll_offset: &mut self.live_pane_scroll_offset,
+            cached_live_pane_lines: &mut self.cached_live_pane_lines,
+            live_pane_error: self.live_pane_poll_failures > 0,
+        };
+        render_details(f, chunks[1], &mut ctx);
 
         // Render footer with keybindings help
         render_footer(
             f,
             footer_area,
             self.input_mode,
-            self.history_view,
+            self.detail_mode,
             self.toast.as_ref(),
             self.kill_confirm.as_ref(),
             self.add_pane_pending.as_ref(),
