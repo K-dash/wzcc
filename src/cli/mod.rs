@@ -190,6 +190,51 @@ impl WeztermCli {
         parse_pane_id(&stdout)
     }
 
+    /// Retrieve the textual content of a pane including ANSI escape sequences.
+    /// Returns the raw stdout bytes because `ansi-to-tui` works with `&[u8]`.
+    pub fn get_text(pane_id: u32) -> Result<Vec<u8>> {
+        let output = Command::new("wezterm")
+            .args([
+                "cli",
+                "get-text",
+                "--pane-id",
+                &pane_id.to_string(),
+                "--escapes",
+            ])
+            .output()
+            .context("Failed to execute wezterm cli get-text")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!(
+                "wezterm cli get-text failed for pane {}: {}",
+                pane_id,
+                stderr
+            );
+        }
+
+        Ok(output.stdout)
+    }
+
+    /// Retrieve the textual content of a pane as plain text (no ANSI escapes).
+    pub fn get_text_plain(pane_id: u32) -> Result<String> {
+        let output = Command::new("wezterm")
+            .args(["cli", "get-text", "--pane-id", &pane_id.to_string()])
+            .output()
+            .context("Failed to execute wezterm cli get-text (plain)")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!(
+                "wezterm cli get-text (plain) failed for pane {}: {}",
+                pane_id,
+                stderr
+            );
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+
     /// Change tab title for the specified pane
     pub fn set_tab_title(pane_id: u32, title: &str) -> Result<()> {
         let output = Command::new("wezterm")
@@ -311,6 +356,43 @@ mod tests {
     fn test_activate_nonexistent_pane() {
         // Specify non-existent pane_id
         let result = WeztermCli::activate_pane(99999);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    #[ignore] // Skip in CI (requires wezterm CLI)
+    fn test_get_text() {
+        use crate::datasource::{PaneDataSource, WeztermDataSource};
+
+        let ds = WeztermDataSource::new();
+        let panes = ds.list_panes().unwrap();
+
+        if let Some(pane) = panes.iter().find(|p| p.is_active) {
+            let result = WeztermCli::get_text(pane.pane_id);
+            assert!(result.is_ok());
+            assert!(!result.unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    #[ignore] // Skip in CI (requires wezterm CLI)
+    fn test_get_text_plain() {
+        use crate::datasource::{PaneDataSource, WeztermDataSource};
+
+        let ds = WeztermDataSource::new();
+        let panes = ds.list_panes().unwrap();
+
+        if let Some(pane) = panes.iter().find(|p| p.is_active) {
+            let result = WeztermCli::get_text_plain(pane.pane_id);
+            assert!(result.is_ok());
+            assert!(!result.unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn test_get_text_nonexistent_pane() {
+        let result = WeztermCli::get_text(99999);
         assert!(result.is_err());
     }
 }

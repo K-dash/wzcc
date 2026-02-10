@@ -8,6 +8,6 @@ pub mod toast;
 
 pub use app::App;
 pub use event::{Event, EventHandler};
-pub use render::HistoryViewMode;
+pub use render::DetailMode;
 pub use session::ClaudeSession;
 pub use toast::{Toast, ToastType};
