@@ -568,12 +568,32 @@ fn render_table(
     // Overhead per column: "│ " (2) + " " (1) = 3, plus a trailing "│" (1).
     let overhead = 3 * num_cols + 1;
     let total_content: usize = col_widths.iter().sum();
-    if max_width > overhead && total_content + overhead > max_width {
-        let available = max_width - overhead;
-        if total_content > 0 {
-            for w in &mut col_widths {
-                *w = (*w * available / total_content).max(1);
+    if total_content + overhead > max_width {
+        if max_width > overhead {
+            let available = max_width - overhead;
+            if total_content > 0 {
+                for w in &mut col_widths {
+                    *w = (*w * available / total_content).max(1);
+                }
             }
+            // max(1) can cause the sum to exceed available; trim the widest
+            // columns until the constraint is satisfied.
+            let mut sum: usize = col_widths.iter().sum();
+            while sum > available {
+                if let Some(max_w) = col_widths.iter_mut().max() {
+                    if *max_w <= 1 {
+                        break;
+                    }
+                    *max_w -= 1;
+                    sum -= 1;
+                } else {
+                    break;
+                }
+            }
+        } else {
+            // Viewport too narrow for any bordered table — give each
+            // column 1 char so content is at least partially visible.
+            col_widths.fill(1);
         }
     }
 
@@ -993,5 +1013,30 @@ mod tests {
                 "line {i} exceeds width 20: {line_w} cols — {line:?}"
             );
         }
+    }
+
+    #[test]
+    fn test_table_extremely_narrow_width() {
+        // 2 columns: overhead = 3*2+1 = 7.  width=8 → only 1 char available.
+        let input = "| AB | CD |\n|---|---|\n| ef | gh |";
+        let lines = markdown_to_lines(input, 8);
+        assert!(!lines.is_empty(), "should not be empty at width 8");
+        // width=4 → narrower than overhead; should still not panic.
+        let lines2 = markdown_to_lines(input, 4);
+        assert!(!lines2.is_empty(), "should not be empty at width 4");
+        // width=1 → extreme edge; must not panic.
+        let lines3 = markdown_to_lines(input, 1);
+        assert!(!lines3.is_empty(), "should not be empty at width 1");
+    }
+
+    #[test]
+    fn test_table_many_columns_narrow() {
+        // 5 columns: overhead = 3*5+1 = 16.  width=15 → less than overhead.
+        let input = "| a | b | c | d | e |\n|---|---|---|---|---|\n| 1 | 2 | 3 | 4 | 5 |";
+        let lines = markdown_to_lines(input, 15);
+        assert!(
+            !lines.is_empty(),
+            "many-column table at narrow width should not panic"
+        );
     }
 }
