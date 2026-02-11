@@ -159,6 +159,8 @@ pub struct ClaudeSession {
     pub status: SessionStatus,
     /// Git branch name
     pub git_branch: Option<String>,
+    /// Git worktree relative path (only set for linked worktrees)
+    pub git_worktree: Option<String>,
     /// Last user prompt (from transcript)
     pub last_prompt: Option<String>,
     /// Last assistant output text (from transcript)

@@ -1,6 +1,6 @@
 use crate::cli::{switch_workspace, WeztermCli};
 use crate::config::{Config, SpawnCommand};
-use crate::datasource::git::GitBranchCache;
+use crate::datasource::git::{GitBranchCache, GitWorktreeCache};
 use crate::datasource::{
     PaneDataSource, ProcessDataSource, SystemProcessDataSource, WeztermDataSource,
 };
@@ -160,6 +160,8 @@ pub struct App {
     live_pane_poll_failures: u32,
     /// Git branch cache (30s TTL)
     git_branch_cache: GitBranchCache,
+    /// Git worktree cache (30s TTL)
+    git_worktree_cache: GitWorktreeCache,
     /// Last time a transcript-only refresh was performed (for debouncing)
     last_transcript_refresh: Instant,
     /// Whether a transcript refresh is pending (trailing-edge debounce)
@@ -247,6 +249,7 @@ impl App {
             last_live_pane_fetch: Instant::now(),
             live_pane_poll_failures: 0,
             git_branch_cache: GitBranchCache::new(30),
+            git_worktree_cache: GitWorktreeCache::new(30),
             last_transcript_refresh: Instant::now(),
             pending_transcript_refresh: false,
             answer_select_pending: None,
@@ -377,6 +380,7 @@ impl App {
                     reason,
                     status: session_info.status,
                     git_branch: None,
+                    git_worktree: None,
                     last_prompt: session_info.last_prompt,
                     last_output: session_info.last_output,
                     session_id: session_info.session_id,
@@ -388,10 +392,11 @@ impl App {
             })
             .collect();
 
-        // Fill in git branches with caching (separate loop to avoid borrow issues)
+        // Fill in git branches and worktree info with caching (separate loop to avoid borrow issues)
         for session in &mut self.sessions {
             if let Some(cwd) = session.pane.cwd_path() {
                 session.git_branch = self.git_branch_cache.get(&cwd);
+                session.git_worktree = self.git_worktree_cache.get(&cwd);
             }
         }
 
@@ -547,6 +552,7 @@ mod tests {
             },
             status: SessionStatus::Idle,
             git_branch: None,
+            git_worktree: None,
             last_prompt: Some("test prompt".to_string()),
             last_output: Some("test output".to_string()),
             session_id: None,
