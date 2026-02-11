@@ -125,6 +125,10 @@ impl App {
                                 self.slash_filtered.clear();
                                 self.dirty = true;
                             }
+                            KeyCode::Char(_) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                // Ignore other Ctrl combinations (Ctrl+a/e/h/l/o etc.)
+                                // to prevent them being inserted as literal characters
+                            }
                             KeyCode::Char(c) => {
                                 self.dirty |= self.input_buffer.insert_char(c);
                                 self.update_slash_filter();
