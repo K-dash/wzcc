@@ -57,6 +57,12 @@
 #     - ~/beads-planning  # Personal planning repo
 #     - ~/work-planning   # Work planning repo
 
+# Hook chaining configuration
+# The pre-commit hook chains to 'make all' (fmt + lint + test).
+# Default 5000ms is too short for cargo builds; increase to 30s.
+hooks:
+  chain_timeout_ms: 30000
+
 # Integration settings (access with 'bd config get/set')
 # These are stored in the database, not in this file:
 # - jira.url

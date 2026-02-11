@@ -32,10 +32,11 @@ use super::event::{
 };
 use super::input_buffer::InputBuffer;
 use super::render::{
-    render_command_select, render_details, render_footer, render_list, DetailMode,
-    DetailsRenderCtx, LivePaneLinesCache,
+    render_command_select, render_details, render_footer, render_list, render_slash_complete,
+    DetailMode, DetailsRenderCtx, LivePaneLinesCache,
 };
 use super::session::ClaudeSession;
+use super::slash_commands::SlashCommand;
 use super::toast::Toast;
 
 #[path = "app/actions.rs"]
@@ -109,6 +110,14 @@ pub struct App {
     input_mode: bool,
     /// Input buffer with cursor management
     input_buffer: InputBuffer,
+    /// Cached slash commands for autocomplete (populated on input mode entry)
+    slash_commands: Vec<SlashCommand>,
+    /// Filtered slash command indices matching current input prefix
+    slash_filtered: Vec<usize>,
+    /// Whether the autocomplete popup is visible
+    slash_complete_active: bool,
+    /// ListState for slash command autocomplete navigation
+    slash_complete_state: ListState,
     /// Toast notification
     toast: Option<Toast>,
     /// Kill confirmation mode (stores pane_id and display label)
@@ -193,6 +202,10 @@ impl App {
             details_width_percent: 65,
             input_mode: false,
             input_buffer: InputBuffer::new(),
+            slash_commands: Vec::new(),
+            slash_filtered: Vec::new(),
+            slash_complete_active: false,
+            slash_complete_state: ListState::default(),
             toast,
             kill_confirm: None,
             add_pane_pending: None,

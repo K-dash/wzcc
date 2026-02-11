@@ -4,6 +4,7 @@ pub mod input_buffer;
 pub mod markdown;
 pub mod render;
 pub mod session;
+pub mod slash_commands;
 pub mod toast;
 
 pub use app::App;
