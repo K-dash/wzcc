@@ -308,4 +308,128 @@ mod tests {
         assert!(dst.add_modifier.contains(Modifier::BOLD));
         assert!(dst.add_modifier.contains(Modifier::ITALIC));
     }
+
+    /// Helper: call render_live_pane inside a test terminal and return the
+    /// final scroll_offset value.
+    fn render_and_get_scroll_offset(
+        content: Option<&[u8]>,
+        content_hash: u64,
+        initial_offset: usize,
+        area_height: u16,
+    ) -> usize {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let backend = TestBackend::new(80, area_height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut offset = initial_offset;
+        let mut cache: super::LivePaneLinesCache = None;
+        terminal
+            .draw(|f| {
+                let area = Rect::new(0, 0, 80, area_height);
+                render_live_pane(
+                    f,
+                    area,
+                    content,
+                    content_hash,
+                    &mut offset,
+                    &mut cache,
+                    false,
+                );
+            })
+            .unwrap();
+        offset
+    }
+
+    #[test]
+    fn test_scroll_offset_usize_max_clamps_to_bottom() {
+        // 10 lines of content in a 5-row viewport (3 usable after borders)
+        let content = b"1\n2\n3\n4\n5\n6\n7\n8\n9\n10";
+        let offset = render_and_get_scroll_offset(Some(content), 42, usize::MAX, 5);
+        // content_height=10, viewport_height=5-2=3, max_scroll=7
+        assert_eq!(offset, 7);
+    }
+
+    #[test]
+    fn test_scroll_offset_zero_stays_at_top() {
+        let content = b"1\n2\n3\n4\n5\n6\n7\n8\n9\n10";
+        let offset = render_and_get_scroll_offset(Some(content), 42, 0, 5);
+        assert_eq!(offset, 0);
+    }
+
+    #[test]
+    fn test_scroll_offset_clamped_when_content_shorter_than_viewport() {
+        // 2 lines of content in a 10-row viewport -> max_scroll=0
+        let content = b"hello\nworld";
+        let offset = render_and_get_scroll_offset(Some(content), 42, usize::MAX, 10);
+        assert_eq!(offset, 0);
+    }
+
+    #[test]
+    fn test_cache_hit_same_hash_and_width() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let content = b"hello\nworld";
+        let hash = 123;
+        let mut cache: super::LivePaneLinesCache = None;
+
+        let backend = TestBackend::new(80, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut offset = 0;
+
+        // First render — populates cache
+        terminal
+            .draw(|f| {
+                let area = Rect::new(0, 0, 80, 10);
+                render_live_pane(f, area, Some(content), hash, &mut offset, &mut cache, false);
+            })
+            .unwrap();
+        assert!(cache.is_some());
+        let (cached_key, _) = cache.as_ref().unwrap();
+        assert_eq!(*cached_key, (123, 78)); // 80 - 2 borders = 78
+
+        // Second render with same hash — cache should still be the same key
+        terminal
+            .draw(|f| {
+                let area = Rect::new(0, 0, 80, 10);
+                render_live_pane(f, area, Some(content), hash, &mut offset, &mut cache, false);
+            })
+            .unwrap();
+        let (cached_key2, _) = cache.as_ref().unwrap();
+        assert_eq!(*cached_key2, (123, 78));
+    }
+
+    #[test]
+    fn test_cache_miss_different_hash() {
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let content = b"hello\nworld";
+        let mut cache: super::LivePaneLinesCache = None;
+
+        let backend = TestBackend::new(80, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut offset = 0;
+
+        // First render with hash=100
+        terminal
+            .draw(|f| {
+                let area = Rect::new(0, 0, 80, 10);
+                render_live_pane(f, area, Some(content), 100, &mut offset, &mut cache, false);
+            })
+            .unwrap();
+        let (key1, _) = cache.as_ref().unwrap();
+        assert_eq!(key1.0, 100);
+
+        // Second render with hash=200 — cache should update
+        terminal
+            .draw(|f| {
+                let area = Rect::new(0, 0, 80, 10);
+                render_live_pane(f, area, Some(content), 200, &mut offset, &mut cache, false);
+            })
+            .unwrap();
+        let (key2, _) = cache.as_ref().unwrap();
+        assert_eq!(key2.0, 200);
+    }
 }

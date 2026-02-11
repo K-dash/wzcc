@@ -17,6 +17,9 @@ const WEZTERM_CLI_TIMEOUT_DEFAULT: Duration = Duration::from_secs(3);
 const WEZTERM_CLI_TIMEOUT_SLOW: Duration = Duration::from_secs(8);
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 const PIPE_RECV_TIMEOUT: Duration = Duration::from_millis(200);
+/// Maximum scrollback lines to request from wezterm.
+/// wezterm clamps this to the actual scrollback size, so over-requesting is safe.
+const SCROLLBACK_START_LINE: &str = "-10000";
 
 fn spawn_pipe_reader<R>(mut reader: R) -> Receiver<std::io::Result<Vec<u8>>>
 where
@@ -282,13 +285,9 @@ impl WeztermCli {
     pub fn get_text(pane_id: u32, scrollback: bool) -> Result<Vec<u8>> {
         let pane_id_str = pane_id.to_string();
         let mut args = vec!["cli", "get-text", "--pane-id", &pane_id_str, "--escapes"];
-        // A large negative start-line value fetches the entire scrollback
-        // buffer. wezterm clamps it to the actual scrollback size.
-        let start_line;
         if scrollback {
-            start_line = "-10000".to_string();
             args.push("--start-line");
-            args.push(&start_line);
+            args.push(SCROLLBACK_START_LINE);
         }
         let output = run_wezterm_cli(
             &args,
@@ -535,5 +534,13 @@ mod tests {
     fn test_get_text_nonexistent_pane() {
         let result = WeztermCli::get_text(99999, false);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_scrollback_start_line_is_negative() {
+        // The constant must be a negative number string so wezterm fetches
+        // scrollback lines before the visible screen.
+        let val: i64 = SCROLLBACK_START_LINE.parse().unwrap();
+        assert!(val < 0);
     }
 }
