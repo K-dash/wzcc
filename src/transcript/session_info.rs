@@ -3,6 +3,7 @@ use crate::session_mapping::{MappingResult, SessionMapping};
 use std::path::PathBuf;
 use std::time::SystemTime;
 
+use super::info::WaitingPrompt;
 use super::{
     get_latest_transcript, get_transcript_dir, read_transcript_info, SessionStatus, TranscriptInfo,
 };
@@ -19,6 +20,8 @@ pub struct SessionInfo {
     pub updated_at: Option<SystemTime>,
     /// Warning message to display (e.g., stale mapping)
     pub warning: Option<String>,
+    /// Parsed waiting prompt data when status is WaitingForUser.
+    pub waiting_prompt: Option<WaitingPrompt>,
 }
 
 /// Get file modification time.
@@ -39,17 +42,26 @@ pub fn detect_session_info(pane: &Pane) -> SessionInfo {
                 // We have a valid mapping - use the transcript path from it
                 let transcript_path = mapping.transcript_path.clone();
 
-                let (status, last_prompt, last_output, updated_at) = if transcript_path.exists() {
-                    let info = read_transcript_info(&transcript_path).unwrap_or(TranscriptInfo {
-                        status: SessionStatus::Unknown,
-                        last_prompt: None,
-                        last_output: None,
-                    });
-                    let mtime = get_file_mtime(&transcript_path);
-                    (info.status, info.last_prompt, info.last_output, mtime)
-                } else {
-                    (SessionStatus::Ready, None, None, None)
-                };
+                let (status, last_prompt, last_output, updated_at, waiting_prompt) =
+                    if transcript_path.exists() {
+                        let info =
+                            read_transcript_info(&transcript_path).unwrap_or(TranscriptInfo {
+                                status: SessionStatus::Unknown,
+                                last_prompt: None,
+                                last_output: None,
+                                waiting_prompt: None,
+                            });
+                        let mtime = get_file_mtime(&transcript_path);
+                        (
+                            info.status,
+                            info.last_prompt,
+                            info.last_output,
+                            mtime,
+                            info.waiting_prompt,
+                        )
+                    } else {
+                        (SessionStatus::Ready, None, None, None, None)
+                    };
 
                 return SessionInfo {
                     status,
@@ -59,6 +71,7 @@ pub fn detect_session_info(pane: &Pane) -> SessionInfo {
                     transcript_path: Some(transcript_path),
                     updated_at,
                     warning: None,
+                    waiting_prompt,
                 };
             }
             MappingResult::Stale(mapping) => {
@@ -66,21 +79,25 @@ pub fn detect_session_info(pane: &Pane) -> SessionInfo {
                 // This prevents showing wrong status from another session with same CWD
                 // Read transcript for actual status instead of showing Unknown
                 let transcript_path = mapping.transcript_path.clone();
-                let (status, last_prompt, last_output, updated_at) = if transcript_path.exists() {
-                    let info = read_transcript_info(&transcript_path).unwrap_or(TranscriptInfo {
-                        status: SessionStatus::Unknown,
-                        last_prompt: None,
-                        last_output: None,
-                    });
-                    (
-                        info.status,
-                        info.last_prompt,
-                        info.last_output,
-                        get_file_mtime(&transcript_path),
-                    )
-                } else {
-                    (SessionStatus::Unknown, None, None, None)
-                };
+                let (status, last_prompt, last_output, updated_at, waiting_prompt) =
+                    if transcript_path.exists() {
+                        let info =
+                            read_transcript_info(&transcript_path).unwrap_or(TranscriptInfo {
+                                status: SessionStatus::Unknown,
+                                last_prompt: None,
+                                last_output: None,
+                                waiting_prompt: None,
+                            });
+                        (
+                            info.status,
+                            info.last_prompt,
+                            info.last_output,
+                            get_file_mtime(&transcript_path),
+                            info.waiting_prompt,
+                        )
+                    } else {
+                        (SessionStatus::Unknown, None, None, None, None)
+                    };
 
                 return SessionInfo {
                     status,
@@ -92,6 +109,7 @@ pub fn detect_session_info(pane: &Pane) -> SessionInfo {
                     warning: Some(
                         "Session info stale (statusLine not updating). Try interacting with the session.".to_string(),
                     ),
+                    waiting_prompt,
                 };
             }
             MappingResult::NotFound => {
@@ -101,7 +119,8 @@ pub fn detect_session_info(pane: &Pane) -> SessionInfo {
     }
 
     // Fallback to CWD-based detection
-    let (status, last_prompt, last_output, updated_at) = detect_status_and_output_by_cwd(pane);
+    let (status, last_prompt, last_output, updated_at, waiting_prompt) =
+        detect_status_and_output_by_cwd(pane);
 
     SessionInfo {
         status,
@@ -111,6 +130,7 @@ pub fn detect_session_info(pane: &Pane) -> SessionInfo {
         transcript_path: None,
         updated_at,
         warning: None,
+        waiting_prompt,
     }
 }
 
@@ -122,30 +142,38 @@ fn detect_status_and_output_by_cwd(
     Option<String>,
     Option<String>,
     Option<SystemTime>,
+    Option<WaitingPrompt>,
 ) {
     let cwd = match pane.cwd_path() {
         Some(cwd) => cwd,
-        None => return (SessionStatus::Unknown, None, None, None),
+        None => return (SessionStatus::Unknown, None, None, None, None),
     };
 
     let dir = match get_transcript_dir(&cwd) {
         Some(dir) => dir,
         // No transcript directory = Claude Code is running but no session yet
-        None => return (SessionStatus::Ready, None, None, None),
+        None => return (SessionStatus::Ready, None, None, None, None),
     };
 
     let transcript_path = match get_latest_transcript(&dir) {
         Ok(Some(path)) => path,
         // No transcript file = Claude Code is running but no session yet
-        _ => return (SessionStatus::Ready, None, None, None),
+        _ => return (SessionStatus::Ready, None, None, None, None),
     };
 
     let info = read_transcript_info(&transcript_path).unwrap_or(TranscriptInfo {
         status: SessionStatus::Unknown,
         last_prompt: None,
         last_output: None,
+        waiting_prompt: None,
     });
     let updated_at = get_file_mtime(&transcript_path);
 
-    (info.status, info.last_prompt, info.last_output, updated_at)
+    (
+        info.status,
+        info.last_prompt,
+        info.last_output,
+        updated_at,
+        info.waiting_prompt,
+    )
 }

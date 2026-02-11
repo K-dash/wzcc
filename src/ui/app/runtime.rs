@@ -282,6 +282,49 @@ impl App {
                         _ => {}
                     }
                 }
+                Event::Key(key) if self.answer_select_pending.is_some() => {
+                    // Answer selection mode: pick an answer for WaitingForUser session
+                    match key.code {
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            if let Some(ref state) = self.answer_select_pending {
+                                let len = state.options.len();
+                                if let Some(i) = self.answer_select_state.selected() {
+                                    if i + 1 < len {
+                                        self.answer_select_state.select(Some(i + 1));
+                                        self.dirty = true;
+                                    }
+                                }
+                            }
+                        }
+                        KeyCode::Char('k') | KeyCode::Up => {
+                            if let Some(i) = self.answer_select_state.selected() {
+                                if i > 0 {
+                                    self.answer_select_state.select(Some(i - 1));
+                                    self.dirty = true;
+                                }
+                            }
+                        }
+                        KeyCode::Enter => {
+                            if let Some(i) = self.answer_select_state.selected() {
+                                self.confirm_answer_select(i);
+                            }
+                        }
+                        KeyCode::Char(c @ '1'..='9') => {
+                            let idx = (c as usize) - ('1' as usize);
+                            if self
+                                .answer_select_pending
+                                .as_ref()
+                                .is_some_and(|s| idx < s.options.len())
+                            {
+                                self.confirm_answer_select(idx);
+                            }
+                        }
+                        KeyCode::Esc => {
+                            self.cancel_answer_select();
+                        }
+                        _ => {}
+                    }
+                }
                 Event::Key(key) if self.detail_mode == DetailMode::HistoryList => {
                     // History list view key handling
                     match key.code {
@@ -572,6 +615,9 @@ impl App {
                     } else if key.code == KeyCode::Char('a') {
                         // Enter add-pane mode (split direction selection)
                         self.request_add_pane();
+                    } else if key.code == KeyCode::Char('o') {
+                        // Open answer selection for WaitingForUser session
+                        self.open_answer_select();
                     } else if is_refresh_key(&key) {
                         // Show refreshing indicator then update
                         self.refreshing = true;
@@ -599,9 +645,10 @@ impl App {
                 Event::Mouse(mouse)
                     if self.input_mode
                         || self.detail_mode != DetailMode::Summary
-                        || self.command_select_pending.is_some() =>
+                        || self.command_select_pending.is_some()
+                        || self.answer_select_pending.is_some() =>
                 {
-                    // Ignore mouse in input mode, history mode, live pane mode, and command selection
+                    // Ignore mouse in input mode, history mode, live pane mode, command selection, and answer selection
                     let _ = mouse;
                 }
                 Event::Mouse(mouse) => {
@@ -782,6 +829,11 @@ impl App {
         render_details(f, chunks[1], &mut ctx);
 
         // Render footer with keybindings help
+        let has_waiting_session = self
+            .list_state
+            .selected()
+            .and_then(|i| self.sessions.get(i))
+            .is_some_and(|s| s.waiting_prompt.is_some());
         render_footer(
             f,
             footer_area,
@@ -792,6 +844,8 @@ impl App {
             self.add_pane_pending.as_ref(),
             self.command_select_pending.is_some(),
             self.slash_complete_active,
+            self.answer_select_pending.is_some(),
+            has_waiting_session,
         );
 
         // Render slash command autocomplete popup (anchored to details area)
@@ -813,6 +867,11 @@ impl App {
                 &self.resolved_commands,
                 &mut self.command_select_state,
             );
+        }
+
+        // Render answer selection popup overlay (on top of everything)
+        if let Some(ref state) = self.answer_select_pending {
+            render_answer_select(f, size, state, &mut self.answer_select_state);
         }
     }
 }

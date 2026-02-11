@@ -304,6 +304,21 @@ pub(super) fn render_summary_details(
                 )));
             }
 
+            // Show hint when session is waiting for user input
+            if session.waiting_prompt.is_some() {
+                lines.push(Line::from(vec![
+                    Span::styled("⚡ ", Style::default().fg(Color::Magenta)),
+                    Span::styled("Press ", Style::default().fg(Color::Magenta)),
+                    Span::styled(
+                        "o",
+                        Style::default()
+                            .fg(Color::Magenta)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(" to respond", Style::default().fg(Color::Magenta)),
+                ]));
+            }
+
             // Display last prompt and last output preview
             // Dynamically compute header height: actual lines + 2 for block border
             let header_lines = lines.len() as u16 + 2;

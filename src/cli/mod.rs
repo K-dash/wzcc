@@ -308,6 +308,25 @@ impl WeztermCli {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
 
+    /// Send a raw keystroke to the specified pane without bracketed paste or Enter.
+    /// Used for single-key responses (e.g., number key for option selection).
+    pub fn send_keystroke(pane_id: u32, key: &str) -> Result<()> {
+        let pane_id_str = pane_id.to_string();
+        run_wezterm_cli(
+            &[
+                "cli",
+                "send-text",
+                "--pane-id",
+                &pane_id_str,
+                "--no-paste",
+                key,
+            ],
+            WEZTERM_CLI_TIMEOUT_DEFAULT,
+            &format!("cli send-text --pane-id {} --no-paste <key>", pane_id),
+        )?;
+        Ok(())
+    }
+
     /// Change tab title for the specified pane
     pub fn set_tab_title(pane_id: u32, title: &str) -> Result<()> {
         let pane_id_str = pane_id.to_string();

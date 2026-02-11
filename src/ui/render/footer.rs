@@ -21,6 +21,8 @@ pub(super) fn render_footer(
     add_pane_pending: Option<&(u32, String, u32)>,
     command_select_active: bool,
     slash_complete_active: bool,
+    answer_select_active: bool,
+    has_waiting_session: bool,
 ) {
     if let Some(toast) = toast {
         let (color, prefix) = match toast.toast_type {
@@ -55,6 +57,43 @@ pub(super) fn render_footer(
             Span::raw("cancel"),
         ]);
         let paragraph = Paragraph::new(confirm_text);
+        f.render_widget(paragraph, area);
+        return;
+    }
+
+    if answer_select_active {
+        let prompt_text = Line::from(vec![
+            Span::styled("Answer: ", Style::default().fg(Color::Magenta)),
+            Span::styled(
+                "[jk]",
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Select "),
+            Span::styled(
+                "[1-9]",
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Quick "),
+            Span::styled(
+                "[Enter]",
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Send "),
+            Span::styled(
+                "[Esc]",
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Cancel"),
+        ]);
+        let paragraph = Paragraph::new(prompt_text);
         f.render_widget(paragraph, area);
         return;
     }
@@ -210,7 +249,7 @@ pub(super) fn render_footer(
             Span::raw("Clear"),
         ])
     } else {
-        Line::from(vec![
+        let mut spans = vec![
             Span::styled("[↑↓/jk]", Style::default().fg(Color::Cyan)),
             Span::raw("Select "),
             Span::styled("[Enter]", Style::default().fg(Color::Cyan)),
@@ -233,9 +272,14 @@ pub(super) fn render_footer(
             Span::raw("Kill "),
             Span::styled("[a]", Style::default().fg(Color::Cyan)),
             Span::raw("Add "),
-            Span::styled("[q]", Style::default().fg(Color::Cyan)),
-            Span::raw("Quit"),
-        ])
+        ];
+        if has_waiting_session {
+            spans.push(Span::styled("[o]", Style::default().fg(Color::Magenta)));
+            spans.push(Span::raw("Answer "));
+        }
+        spans.push(Span::styled("[q]", Style::default().fg(Color::Cyan)));
+        spans.push(Span::raw("Quit"));
+        Line::from(spans)
     };
 
     let paragraph = Paragraph::new(help_text).style(Style::default().fg(Color::DarkGray));

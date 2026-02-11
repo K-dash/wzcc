@@ -1,6 +1,6 @@
 use crate::detector::DetectionReason;
 use crate::models::Pane;
-use crate::transcript::SessionStatus;
+use crate::transcript::{SessionStatus, WaitingPrompt};
 use ratatui::{
     style::{Color, Style},
     text::{Line, Span},
@@ -171,4 +171,6 @@ pub struct ClaudeSession {
     pub updated_at: Option<SystemTime>,
     /// Warning message to display in details
     pub warning: Option<String>,
+    /// Parsed waiting prompt data when status is WaitingForUser.
+    pub waiting_prompt: Option<WaitingPrompt>,
 }

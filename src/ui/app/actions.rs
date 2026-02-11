@@ -603,4 +603,152 @@ impl App {
             }
         }
     }
+
+    /// Open answer selection popup for the selected WaitingForUser session.
+    pub(super) fn open_answer_select(&mut self) {
+        use crate::transcript::WaitingPrompt;
+
+        let Some(i) = self.list_state.selected() else {
+            return;
+        };
+        let Some(session) = self.sessions.get(i) else {
+            return;
+        };
+
+        let Some(ref waiting) = session.waiting_prompt else {
+            // waiting_prompt parse failed but session is WaitingForUser — fall back to pane jump
+            if matches!(
+                session.status,
+                crate::transcript::SessionStatus::WaitingForUser { .. }
+            ) {
+                let _ = self.jump_to_selected();
+                return;
+            }
+            self.toast = Some(Toast::error("Session is not waiting for input".into()));
+            self.dirty = true;
+            return;
+        };
+
+        let pane_id = session.pane.pane_id;
+
+        match waiting {
+            WaitingPrompt::PlanApproval => {
+                // Jump to pane immediately (user handles Shift+Tab for plan mode)
+                let _ = self.jump_to_selected();
+            }
+            WaitingPrompt::Ask(ask_input) => {
+                let Some(question) = ask_input.questions.first() else {
+                    // Empty questions — fall back to pane jump
+                    let _ = self.jump_to_selected();
+                    return;
+                };
+
+                if question.multi_select {
+                    // Multi-select not supported via single keystroke — jump to pane
+                    let _ = self.jump_to_selected();
+                    return;
+                }
+
+                let options: Vec<AnswerOption> = question
+                    .options
+                    .iter()
+                    .enumerate()
+                    .map(|(i, opt)| AnswerOption {
+                        label: opt.label.clone(),
+                        description: opt.description.clone(),
+                        keystroke: (i + 1).to_string(),
+                    })
+                    .collect();
+
+                if options.is_empty() {
+                    let _ = self.jump_to_selected();
+                    return;
+                }
+
+                self.answer_select_pending = Some(AnswerSelectState {
+                    pane_id,
+                    title: question.question.clone(),
+                    options,
+                });
+                self.answer_select_state.select(Some(0));
+                self.dirty = true;
+            }
+            WaitingPrompt::ToolPermission { tool_names } => {
+                let title = format!("Approve: {}", tool_names.join(", "));
+                self.answer_select_pending = Some(AnswerSelectState {
+                    pane_id,
+                    title,
+                    options: vec![
+                        AnswerOption {
+                            label: "Allow".into(),
+                            description: Some("Allow this tool call".into()),
+                            keystroke: "1".into(),
+                        },
+                        AnswerOption {
+                            label: "Always allow".into(),
+                            description: Some("Allow all future calls of this tool".into()),
+                            keystroke: "2".into(),
+                        },
+                        AnswerOption {
+                            label: "Reject".into(),
+                            description: Some("Deny this tool call".into()),
+                            keystroke: "3".into(),
+                        },
+                    ],
+                });
+                self.answer_select_state.select(Some(0));
+                self.dirty = true;
+            }
+        }
+    }
+
+    /// Confirm the selected answer and send the keystroke to the pane.
+    pub(super) fn confirm_answer_select(&mut self, index: usize) {
+        if let Some(state) = self.answer_select_pending.take() {
+            if let Some(option) = state.options.get(index) {
+                // Re-check that the session is still waiting
+                let session_idx = self
+                    .sessions
+                    .iter()
+                    .position(|s| s.pane.pane_id == state.pane_id);
+                let still_waiting =
+                    session_idx
+                        .and_then(|i| self.sessions.get(i))
+                        .is_some_and(|s| {
+                            matches!(
+                                s.status,
+                                crate::transcript::SessionStatus::WaitingForUser { .. }
+                            )
+                        });
+
+                if !still_waiting {
+                    self.toast = Some(Toast::error(
+                        "Session is no longer waiting for input".into(),
+                    ));
+                } else {
+                    match WeztermCli::send_keystroke(state.pane_id, &option.keystroke) {
+                        Ok(()) => {
+                            self.toast = Some(Toast::success(format!(
+                                "Sent '{}' to Pane {}",
+                                option.label, state.pane_id
+                            )));
+                        }
+                        Err(e) => {
+                            self.toast = Some(Toast::error(format!("Failed to send: {}", e)));
+                        }
+                    }
+                }
+            }
+            self.answer_select_state.select(None);
+            self.dirty = true;
+            self.needs_full_redraw = true;
+        }
+    }
+
+    /// Cancel the answer selection popup.
+    pub(super) fn cancel_answer_select(&mut self) {
+        self.answer_select_pending = None;
+        self.answer_select_state.select(None);
+        self.dirty = true;
+    }
 }
