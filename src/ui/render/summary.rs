@@ -299,14 +299,6 @@ pub(super) fn render_summary_details(
                 Span::styled(status_text, Style::default().fg(status_color)),
             ]));
 
-            // Display warning message if present
-            if let Some(warning) = &session.warning {
-                lines.push(Line::from(vec![Span::styled(
-                    format!("⚠️  {}", warning),
-                    Style::default().fg(Color::Red),
-                )]));
-            }
-
             // Display git branch
             if let Some(branch) = &session.git_branch {
                 lines.push(Line::from(""));
