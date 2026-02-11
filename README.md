@@ -117,9 +117,11 @@ wzcc tui
 | `G` | Jump to last session |
 | `h` / `l` | Resize details panel (h: expand, l: shrink) |
 | `i` | Open prompt input (send text to selected session) |
+| `y` | Copy selected session output to clipboard |
 | `x` | Kill (close) selected session's pane (with confirmation) |
 | `a` | Add new Claude Code session (split selected pane, then choose `r`ight/`d`own/`t`ab) |
 | `H` | Open conversation history list for selected session |
+| `v` | Open live pane view for selected session |
 | `Enter` / Double-click | Switch to selected session (TUI continues) |
 | `c` | Quit TUI |
 | `q` / `Esc` | Quit TUI |
@@ -141,6 +143,7 @@ wzcc tui
 | `j` / `↓` | Select next turn |
 | `k` / `↑` | Select previous turn |
 | `Enter` | Open selected turn detail |
+| `y` | Copy selected turn response to clipboard |
 | `g` + `g` | Jump to newest turn |
 | `G` | Jump to oldest turn |
 | `Esc` / `q` / `H` | Exit history mode |
@@ -153,9 +156,23 @@ wzcc tui
 | `k` / `↑` | Scroll up one line |
 | `Ctrl+D` | Scroll down half page |
 | `Ctrl+U` | Scroll up half page |
+| `y` | Copy current turn response to clipboard |
 | `g` + `g` | Scroll to top |
 | `G` | Scroll to bottom |
 | `Esc` / `q` / `H` | Back to history list |
+
+**Live Pane Mode** (press `v` in normal mode):
+
+| Key | Action |
+|-----|--------|
+| `j` / `↓` | Scroll down one line |
+| `k` / `↑` | Scroll up one line |
+| `Ctrl+D` | Scroll down half page |
+| `Ctrl+U` | Scroll up half page |
+| `y` | Copy live pane text to clipboard (plain text) |
+| `g` + `g` | Scroll to top |
+| `G` | Scroll to bottom |
+| `Esc` / `q` / `v` | Exit live pane mode |
 
 ## Configuration
 
