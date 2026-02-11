@@ -132,6 +132,8 @@ pub(super) fn render_footer(
             Span::raw("Newest "),
             Span::styled("[G]", Style::default().fg(Color::Yellow)),
             Span::raw("Oldest "),
+            Span::styled("[h/l]", Style::default().fg(Color::Yellow)),
+            Span::raw("Resize "),
             Span::styled("[Esc/q]", Style::default().fg(Color::Yellow)),
             Span::raw("Back"),
         ])
@@ -147,6 +149,8 @@ pub(super) fn render_footer(
             Span::raw("Top "),
             Span::styled("[G]", Style::default().fg(Color::Yellow)),
             Span::raw("Bottom "),
+            Span::styled("[h/l]", Style::default().fg(Color::Yellow)),
+            Span::raw("Resize "),
             Span::styled("[Esc/q]", Style::default().fg(Color::Yellow)),
             Span::raw("Back"),
         ])
@@ -162,6 +166,8 @@ pub(super) fn render_footer(
             Span::raw("Top "),
             Span::styled("[G]", Style::default().fg(Color::Green)),
             Span::raw("Bottom "),
+            Span::styled("[h/l]", Style::default().fg(Color::Green)),
+            Span::raw("Resize "),
             Span::styled("[Esc/q]", Style::default().fg(Color::Green)),
             Span::raw("Back"),
         ])
