@@ -152,6 +152,8 @@ pub struct App {
     live_pane_bytes_hash: u64,
     /// Scroll offset within live pane view (line-level)
     live_pane_scroll_offset: usize,
+    /// Auto-follow tail in live pane view (scroll to bottom on new content)
+    live_pane_follow_tail: bool,
     /// Cached rendered lines for live pane view
     cached_live_pane_lines: LivePaneLinesCache,
     /// Timestamp of the last live pane content fetch
@@ -245,6 +247,7 @@ impl App {
             live_pane_bytes: None,
             live_pane_bytes_hash: 0,
             live_pane_scroll_offset: 0,
+            live_pane_follow_tail: true,
             cached_live_pane_lines: None,
             last_live_pane_fetch: Instant::now(),
             live_pane_poll_failures: 0,

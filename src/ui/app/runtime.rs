@@ -492,18 +492,21 @@ impl App {
                         }
                         KeyCode::Char('j') | KeyCode::Down => {
                             self.pending_g = false;
+                            self.live_pane_follow_tail = false;
                             self.live_pane_scroll_offset =
                                 self.live_pane_scroll_offset.saturating_add(1);
                             self.dirty = true;
                         }
                         KeyCode::Char('k') | KeyCode::Up => {
                             self.pending_g = false;
+                            self.live_pane_follow_tail = false;
                             self.live_pane_scroll_offset =
                                 self.live_pane_scroll_offset.saturating_sub(1);
                             self.dirty = true;
                         }
                         KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             self.pending_g = false;
+                            self.live_pane_follow_tail = false;
                             let half_page = self.viewport_half_height();
                             self.live_pane_scroll_offset =
                                 self.live_pane_scroll_offset.saturating_add(half_page);
@@ -511,6 +514,7 @@ impl App {
                         }
                         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             self.pending_g = false;
+                            self.live_pane_follow_tail = false;
                             let half_page = self.viewport_half_height();
                             self.live_pane_scroll_offset =
                                 self.live_pane_scroll_offset.saturating_sub(half_page);
@@ -518,6 +522,7 @@ impl App {
                         }
                         KeyCode::Char('g') => {
                             if self.pending_g {
+                                self.live_pane_follow_tail = false;
                                 self.live_pane_scroll_offset = 0;
                                 self.dirty = true;
                                 self.pending_g = false;
@@ -527,6 +532,7 @@ impl App {
                         }
                         KeyCode::Char('G') => {
                             self.pending_g = false;
+                            self.live_pane_follow_tail = true;
                             self.live_pane_scroll_offset = usize::MAX;
                             self.dirty = true;
                         }
