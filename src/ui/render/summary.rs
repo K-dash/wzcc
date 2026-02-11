@@ -283,6 +283,14 @@ pub(super) fn render_summary_details(
                     Style::default().fg(Color::Cyan),
                 ));
             }
+            if let Some(worktree) = &session.git_worktree {
+                header_spans.push(Span::styled("  │ ", Style::default().fg(Color::DarkGray)));
+                header_spans.push(Span::styled("🌳 ", Style::default().fg(Color::Green)));
+                header_spans.push(Span::styled(
+                    worktree.as_str(),
+                    Style::default().fg(Color::Green),
+                ));
+            }
             let mut lines = vec![Line::from(header_spans)];
 
             // Line 2: Workspace │ TTY
@@ -545,6 +553,14 @@ pub(super) fn render_session_info_header(
         spans.push(Span::styled(
             branch.as_str(),
             Style::default().fg(Color::Cyan),
+        ));
+    }
+    if let Some(worktree) = &session.git_worktree {
+        spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled("🌳 ", Style::default().fg(Color::Green)));
+        spans.push(Span::styled(
+            worktree.as_str(),
+            Style::default().fg(Color::Green),
         ));
     }
 
