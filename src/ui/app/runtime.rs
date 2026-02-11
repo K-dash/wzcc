@@ -259,6 +259,22 @@ impl App {
                                 self.yank_history_output(i);
                             }
                         }
+                        KeyCode::Char('h') => {
+                            self.pending_g = false;
+                            if self.details_width_percent < 80 {
+                                self.details_width_percent += 5;
+                                self.dirty = true;
+                                self.needs_full_redraw = true;
+                            }
+                        }
+                        KeyCode::Char('l') => {
+                            self.pending_g = false;
+                            if self.details_width_percent > 20 {
+                                self.details_width_percent -= 5;
+                                self.dirty = true;
+                                self.needs_full_redraw = true;
+                            }
+                        }
                         _ => {
                             self.pending_g = false;
                         }
@@ -326,6 +342,22 @@ impl App {
                             self.pending_g = false;
                             self.yank_history_output(self.history_index);
                         }
+                        KeyCode::Char('h') => {
+                            self.pending_g = false;
+                            if self.details_width_percent < 80 {
+                                self.details_width_percent += 5;
+                                self.dirty = true;
+                                self.needs_full_redraw = true;
+                            }
+                        }
+                        KeyCode::Char('l') => {
+                            self.pending_g = false;
+                            if self.details_width_percent > 20 {
+                                self.details_width_percent -= 5;
+                                self.dirty = true;
+                                self.needs_full_redraw = true;
+                            }
+                        }
                         _ => {
                             self.pending_g = false;
                         }
@@ -380,6 +412,22 @@ impl App {
                         KeyCode::Char('y') => {
                             self.pending_g = false;
                             self.yank_live_pane_content();
+                        }
+                        KeyCode::Char('h') => {
+                            self.pending_g = false;
+                            if self.details_width_percent < 80 {
+                                self.details_width_percent += 5;
+                                self.dirty = true;
+                                self.needs_full_redraw = true;
+                            }
+                        }
+                        KeyCode::Char('l') => {
+                            self.pending_g = false;
+                            if self.details_width_percent > 20 {
+                                self.details_width_percent -= 5;
+                                self.dirty = true;
+                                self.needs_full_redraw = true;
+                            }
                         }
                         _ => {
                             self.pending_g = false;
