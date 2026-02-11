@@ -7,11 +7,13 @@ pub use install_workspace_switcher::{
 };
 
 use anyhow::{Context, Result};
+use std::io::Read;
 use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const WEZTERM_CLI_TIMEOUT: Duration = Duration::from_secs(3);
+const WEZTERM_CLI_TIMEOUT_DEFAULT: Duration = Duration::from_secs(3);
+const WEZTERM_CLI_TIMEOUT_SLOW: Duration = Duration::from_secs(8);
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 fn run_command_with_timeout(
@@ -27,42 +29,73 @@ fn run_command_with_timeout(
         .spawn()
         .with_context(|| format!("Failed to start {} {}", program, action))?;
 
+    let mut child_stdout = child
+        .stdout
+        .take()
+        .context("Failed to capture child stdout pipe")?;
+    let mut child_stderr = child
+        .stderr
+        .take()
+        .context("Failed to capture child stderr pipe")?;
+    let stdout_handle = thread::spawn(move || {
+        let mut out = Vec::new();
+        let _ = child_stdout.read_to_end(&mut out);
+        out
+    });
+    let stderr_handle = thread::spawn(move || {
+        let mut out = Vec::new();
+        let _ = child_stderr.read_to_end(&mut out);
+        out
+    });
+
     let start = Instant::now();
-    loop {
+    let mut timed_out = false;
+    let status = loop {
         if let Some(status) = child
             .try_wait()
             .with_context(|| format!("Failed while waiting for {} {}", program, action))?
         {
-            let output = child
-                .wait_with_output()
-                .with_context(|| format!("Failed to collect output from {} {}", program, action))?;
-
-            if !status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                let message = if stderr.is_empty() {
-                    "(no stderr output)".to_string()
-                } else {
-                    stderr
-                };
-                anyhow::bail!("{} {} failed: {}", program, action, message);
-            }
-
-            return Ok(output);
+            break status;
         }
 
         if start.elapsed() >= timeout {
+            timed_out = true;
             let _ = child.kill();
-            let _ = child.wait();
-            anyhow::bail!(
-                "{} {} timed out after {}ms",
-                program,
-                action,
-                timeout.as_millis()
-            );
+            break child
+                .wait()
+                .with_context(|| format!("Failed to reap timed-out {} {}", program, action))?;
         }
 
         thread::sleep(POLL_INTERVAL);
+    };
+
+    let stdout: Vec<u8> = stdout_handle.join().unwrap_or_default();
+    let stderr: Vec<u8> = stderr_handle.join().unwrap_or_default();
+
+    if timed_out {
+        anyhow::bail!(
+            "{} {} timed out after {}ms",
+            program,
+            action,
+            timeout.as_millis()
+        );
     }
+
+    if !status.success() {
+        let stderr = String::from_utf8_lossy(&stderr).trim().to_string();
+        let message = if stderr.is_empty() {
+            "(no stderr output)".to_string()
+        } else {
+            stderr
+        };
+        anyhow::bail!("{} {} failed: {}", program, action, message);
+    }
+
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
 }
 
 fn run_wezterm_cli(args: &[&str], timeout: Duration, action: &str) -> Result<Output> {
@@ -78,7 +111,7 @@ impl WeztermCli {
         let pane_id_str = pane_id.to_string();
         run_wezterm_cli(
             &["cli", "activate-pane", "--pane-id", &pane_id_str],
-            WEZTERM_CLI_TIMEOUT,
+            WEZTERM_CLI_TIMEOUT_DEFAULT,
             &format!("cli activate-pane --pane-id {}", pane_id),
         )?;
         Ok(())
@@ -89,7 +122,7 @@ impl WeztermCli {
         let tab_id_str = tab_id.to_string();
         run_wezterm_cli(
             &["cli", "activate-tab", "--tab-id", &tab_id_str],
-            WEZTERM_CLI_TIMEOUT,
+            WEZTERM_CLI_TIMEOUT_DEFAULT,
             &format!("cli activate-tab --tab-id {}", tab_id),
         )?;
         Ok(())
@@ -100,7 +133,7 @@ impl WeztermCli {
         let pane_id_str = pane_id.to_string();
         run_wezterm_cli(
             &["cli", "send-text", "--pane-id", &pane_id_str, "--", text],
-            WEZTERM_CLI_TIMEOUT,
+            WEZTERM_CLI_TIMEOUT_DEFAULT,
             &format!("cli send-text --pane-id {} -- <text>", pane_id),
         )?;
 
@@ -116,7 +149,7 @@ impl WeztermCli {
                 "--no-paste",
                 "\r",
             ],
-            WEZTERM_CLI_TIMEOUT,
+            WEZTERM_CLI_TIMEOUT_DEFAULT,
             &format!("cli send-text --pane-id {} --no-paste <CR>", pane_id),
         )?;
 
@@ -128,7 +161,7 @@ impl WeztermCli {
         let pane_id_str = pane_id.to_string();
         run_wezterm_cli(
             &["cli", "kill-pane", "--pane-id", &pane_id_str],
-            WEZTERM_CLI_TIMEOUT,
+            WEZTERM_CLI_TIMEOUT_DEFAULT,
             &format!("cli kill-pane --pane-id {}", pane_id),
         )?;
         Ok(())
@@ -167,7 +200,7 @@ impl WeztermCli {
                 "-ic",
                 &shell_cmd,
             ],
-            WEZTERM_CLI_TIMEOUT,
+            WEZTERM_CLI_TIMEOUT_SLOW,
             &format!(
                 "cli split-pane --pane-id {} {} --cwd {}",
                 pane_id, direction, cwd
@@ -203,7 +236,7 @@ impl WeztermCli {
                 "-ic",
                 &shell_cmd,
             ],
-            WEZTERM_CLI_TIMEOUT,
+            WEZTERM_CLI_TIMEOUT_SLOW,
             &format!("cli spawn --cwd {} --window-id {}", cwd, window_id),
         )?;
 
@@ -217,7 +250,7 @@ impl WeztermCli {
         let pane_id_str = pane_id.to_string();
         let output = run_wezterm_cli(
             &["cli", "get-text", "--pane-id", &pane_id_str, "--escapes"],
-            WEZTERM_CLI_TIMEOUT,
+            WEZTERM_CLI_TIMEOUT_SLOW,
             &format!("cli get-text --pane-id {} --escapes", pane_id),
         )?;
         Ok(output.stdout)
@@ -228,7 +261,7 @@ impl WeztermCli {
         let pane_id_str = pane_id.to_string();
         let output = run_wezterm_cli(
             &["cli", "get-text", "--pane-id", &pane_id_str],
-            WEZTERM_CLI_TIMEOUT,
+            WEZTERM_CLI_TIMEOUT_SLOW,
             &format!("cli get-text --pane-id {}", pane_id),
         )?;
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
@@ -239,7 +272,7 @@ impl WeztermCli {
         let pane_id_str = pane_id.to_string();
         run_wezterm_cli(
             &["cli", "set-tab-title", "--pane-id", &pane_id_str, title],
-            WEZTERM_CLI_TIMEOUT,
+            WEZTERM_CLI_TIMEOUT_DEFAULT,
             &format!("cli set-tab-title --pane-id {}", pane_id),
         )?;
         Ok(())
@@ -340,6 +373,46 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("timed out"));
+    }
+
+    #[test]
+    fn test_run_command_with_timeout_nonzero_with_stderr() {
+        let err = run_command_with_timeout(
+            "/bin/sh",
+            &["-c", "echo boom >&2; exit 7"],
+            Duration::from_secs(1),
+            "test-fail-stderr",
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("failed"));
+        assert!(msg.contains("boom"));
+    }
+
+    #[test]
+    fn test_run_command_with_timeout_nonzero_without_stderr() {
+        let err = run_command_with_timeout(
+            "/bin/sh",
+            &["-c", "exit 9"],
+            Duration::from_secs(1),
+            "test-fail-no-stderr",
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("failed"));
+        assert!(msg.contains("(no stderr output)"));
+    }
+
+    #[test]
+    fn test_run_command_with_timeout_large_output_no_false_timeout() {
+        let output = run_command_with_timeout(
+            "/bin/sh",
+            &["-c", "yes x | head -n 50000"],
+            Duration::from_secs(2),
+            "test-large-output",
+        )
+        .unwrap();
+        assert!(output.stdout.len() > 50_000);
     }
 
     #[test]
