@@ -10,10 +10,10 @@ pub mod session_info;
 mod state;
 pub mod watcher;
 
-pub use info::{read_transcript_info, TranscriptInfo};
+pub use info::{read_transcript_info, TranscriptInfo, WaitingPrompt};
 pub use parser::{
-    extract_conversation_turns, get_last_assistant_text, get_last_user_prompt, ConversationTurn,
-    TranscriptEntry,
+    extract_conversation_turns, get_last_assistant_text, get_last_user_prompt,
+    AskUserQuestionInput, ConversationTurn, Question, QuestionOption, TranscriptEntry,
 };
 pub use path::{encode_cwd, get_latest_transcript, get_transcript_dir};
 pub use session_info::{detect_session_info, SessionInfo};

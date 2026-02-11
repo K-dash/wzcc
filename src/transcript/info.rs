@@ -5,16 +5,30 @@
 //! and data extraction) and `state` (status detection logic), avoiding a
 //! direct dependency from parser to state.
 
-use super::parser::{extract_last_assistant_text, extract_last_user_prompt, TranscriptSnapshot};
+use super::parser::{
+    extract_last_assistant_text, extract_last_user_prompt, AskUserQuestionInput, TranscriptSnapshot,
+};
 use super::state::{detect_session_status_from_entries, SessionStatus};
 use anyhow::Result;
 use std::path::Path;
+
+/// Normalized prompt data for a WaitingForUser session.
+#[derive(Debug, Clone)]
+pub enum WaitingPrompt {
+    /// AskUserQuestion with parsed questions and options.
+    Ask(AskUserQuestionInput),
+    /// Tool permission request (Bash, Edit, etc.).
+    ToolPermission { tool_names: Vec<String> },
+    /// ExitPlanMode — user should jump to pane.
+    PlanApproval,
+}
 
 /// Result of reading all transcript information in a single file read.
 pub struct TranscriptInfo {
     pub status: SessionStatus,
     pub last_prompt: Option<String>,
     pub last_output: Option<String>,
+    pub waiting_prompt: Option<WaitingPrompt>,
 }
 
 /// Read a transcript file once and extract status, last user prompt, and
@@ -25,11 +39,48 @@ pub fn read_transcript_info(path: &Path) -> Result<TranscriptInfo> {
     let status = detect_session_status_from_entries(&entries);
     let last_prompt = extract_last_user_prompt(&snapshot, 200);
     let last_output = extract_last_assistant_text(&snapshot, 1000);
+
+    let waiting_prompt = if matches!(status, SessionStatus::WaitingForUser { .. }) {
+        extract_waiting_prompt(&entries)
+    } else {
+        None
+    };
+
     Ok(TranscriptInfo {
         status,
         last_prompt,
         last_output,
+        waiting_prompt,
     })
+}
+
+/// Extract waiting prompt data from the last tool_use entry.
+fn extract_waiting_prompt(entries: &[super::parser::TranscriptEntry]) -> Option<WaitingPrompt> {
+    // Find the last tool_use entry (scanning from end)
+    let tool_entry = entries.iter().rev().find(|e| e.is_tool_use())?;
+    let names = tool_entry.get_tool_names();
+
+    if names.iter().any(|n| n == "AskUserQuestion") {
+        // Try to parse the AskUserQuestion input from the tool_use content block
+        let ask_input = tool_entry
+            .message
+            .as_ref()
+            .and_then(|m| {
+                m.content
+                    .iter()
+                    .find(|c| c.type_ == "tool_use" && c.name.as_deref() == Some("AskUserQuestion"))
+            })
+            .and_then(|c| c.parse_ask_input());
+
+        match ask_input {
+            Some(input) if !input.questions.is_empty() => Some(WaitingPrompt::Ask(input)),
+            _ => None, // Parse failed or empty → caller falls back to pane jump
+        }
+    } else if names.iter().any(|n| n == "ExitPlanMode") {
+        Some(WaitingPrompt::PlanApproval)
+    } else {
+        Some(WaitingPrompt::ToolPermission { tool_names: names })
+    }
 }
 
 #[cfg(test)]

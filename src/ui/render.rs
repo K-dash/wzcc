@@ -9,6 +9,8 @@ use std::time::SystemTime;
 
 use super::session::ClaudeSession;
 
+#[path = "render/answer_select.rs"]
+mod answer_select;
 #[path = "render/command_select.rs"]
 mod command_select;
 #[path = "render/footer.rs"]
@@ -168,6 +170,8 @@ pub fn render_footer(
     add_pane_pending: Option<&(u32, String, u32)>,
     command_select_active: bool,
     slash_complete_active: bool,
+    answer_select_active: bool,
+    has_waiting_session: bool,
 ) {
     footer::render_footer(
         f,
@@ -179,6 +183,8 @@ pub fn render_footer(
         add_pane_pending,
         command_select_active,
         slash_complete_active,
+        answer_select_active,
+        has_waiting_session,
     );
 }
 
@@ -190,6 +196,16 @@ pub fn render_command_select(
     list_state: &mut ListState,
 ) {
     command_select::render_command_select(f, area, commands, list_state);
+}
+
+/// Render the answer selection popup overlay.
+pub(super) fn render_answer_select(
+    f: &mut ratatui::Frame,
+    area: Rect,
+    state: &crate::ui::app::AnswerSelectState,
+    list_state: &mut ListState,
+) {
+    answer_select::render_answer_select(f, area, state, list_state);
 }
 
 /// Render the slash command autocomplete popup overlay.

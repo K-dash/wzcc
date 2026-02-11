@@ -32,8 +32,8 @@ use super::event::{
 };
 use super::input_buffer::InputBuffer;
 use super::render::{
-    render_command_select, render_details, render_footer, render_list, render_slash_complete,
-    DetailMode, DetailsRenderCtx, LivePaneLinesCache,
+    render_answer_select, render_command_select, render_details, render_footer, render_list,
+    render_slash_complete, DetailMode, DetailsRenderCtx, LivePaneLinesCache,
 };
 use super::session::ClaudeSession;
 use super::slash_commands::SlashCommand;
@@ -164,6 +164,24 @@ pub struct App {
     last_transcript_refresh: Instant,
     /// Whether a transcript refresh is pending (trailing-edge debounce)
     pending_transcript_refresh: bool,
+    /// Answer selection popup state (for responding to WaitingForUser sessions)
+    answer_select_pending: Option<AnswerSelectState>,
+    /// ListState for answer selector navigation
+    answer_select_state: ListState,
+}
+
+/// An option in the answer selection popup.
+pub(super) struct AnswerOption {
+    pub label: String,
+    pub description: Option<String>,
+    pub keystroke: String,
+}
+
+/// State for the answer selection popup.
+pub(super) struct AnswerSelectState {
+    pub pane_id: u32,
+    pub title: String,
+    pub options: Vec<AnswerOption>,
 }
 
 impl Default for App {
@@ -231,6 +249,8 @@ impl App {
             git_branch_cache: GitBranchCache::new(30),
             last_transcript_refresh: Instant::now(),
             pending_transcript_refresh: false,
+            answer_select_pending: None,
+            answer_select_state: ListState::default(),
         }
     }
 
@@ -299,6 +319,7 @@ impl App {
             session.warning = info.warning;
             session.session_id = info.session_id;
             session.transcript_path = info.transcript_path;
+            session.waiting_prompt = info.waiting_prompt;
         }
         self.apply_duplicate_cwd_guard();
         self.dirty = true;
@@ -362,6 +383,7 @@ impl App {
                     transcript_path: session_info.transcript_path,
                     updated_at: session_info.updated_at,
                     warning: session_info.warning,
+                    waiting_prompt: session_info.waiting_prompt,
                 })
             })
             .collect();
@@ -531,6 +553,7 @@ mod tests {
             transcript_path: None,
             updated_at: None,
             warning: None,
+            waiting_prompt: None,
         }
     }
 

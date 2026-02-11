@@ -80,6 +80,29 @@ fn read_lines_from_end(path: &Path, seek_multiplier: u64) -> Result<Vec<String>>
     Ok(lines)
 }
 
+/// An option within an AskUserQuestion question.
+#[derive(Debug, Clone, Deserialize)]
+pub struct QuestionOption {
+    pub label: String,
+    pub description: Option<String>,
+}
+
+/// A single question in an AskUserQuestion tool call.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Question {
+    pub question: String,
+    pub header: Option<String>,
+    pub options: Vec<QuestionOption>,
+    #[serde(rename = "multiSelect", default)]
+    pub multi_select: bool,
+}
+
+/// Parsed input for the AskUserQuestion tool.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AskUserQuestionInput {
+    pub questions: Vec<Question>,
+}
+
 /// A content block within a message.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ContentBlock {
@@ -89,6 +112,17 @@ pub struct ContentBlock {
     pub text: Option<String>,
     pub content: Option<String>,
     pub is_error: Option<bool>,
+    #[serde(default)]
+    pub input: Option<serde_json::Value>,
+}
+
+impl ContentBlock {
+    /// Parse the `input` field as an AskUserQuestion input.
+    pub fn parse_ask_input(&self) -> Option<AskUserQuestionInput> {
+        self.input
+            .as_ref()
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+    }
 }
 
 /// The message structure within an assistant entry.
@@ -1127,5 +1161,61 @@ mod tests {
             turns[1].timestamp.as_deref(),
             Some("2026-01-23T11:00:00.000Z")
         );
+    }
+
+    // --- AskUserQuestion input parsing tests ---
+
+    #[test]
+    fn test_parse_ask_input_basic() {
+        let json = r#"{"type":"tool_use","name":"AskUserQuestion","input":{"questions":[{"question":"Which approach?","header":"Approach","options":[{"label":"Simple","description":"Keep it simple"},{"label":"Complex","description":"Full featured"}],"multiSelect":false}]}}"#;
+        let block: ContentBlock = serde_json::from_str(json).unwrap();
+        assert_eq!(block.type_, "tool_use");
+        assert_eq!(block.name.as_deref(), Some("AskUserQuestion"));
+        let ask = block.parse_ask_input().unwrap();
+        assert_eq!(ask.questions.len(), 1);
+        assert_eq!(ask.questions[0].question, "Which approach?");
+        assert_eq!(ask.questions[0].header.as_deref(), Some("Approach"));
+        assert_eq!(ask.questions[0].options.len(), 2);
+        assert_eq!(ask.questions[0].options[0].label, "Simple");
+        assert_eq!(
+            ask.questions[0].options[0].description.as_deref(),
+            Some("Keep it simple")
+        );
+        assert!(!ask.questions[0].multi_select);
+    }
+
+    #[test]
+    fn test_parse_ask_input_missing() {
+        let json = r#"{"type":"tool_use","name":"AskUserQuestion"}"#;
+        let block: ContentBlock = serde_json::from_str(json).unwrap();
+        assert!(block.parse_ask_input().is_none());
+    }
+
+    #[test]
+    fn test_parse_ask_input_wrong_shape() {
+        let json = r#"{"type":"tool_use","name":"AskUserQuestion","input":{"not_questions":true}}"#;
+        let block: ContentBlock = serde_json::from_str(json).unwrap();
+        // Should fail to parse as AskUserQuestionInput (missing required `questions` field)
+        assert!(block.parse_ask_input().is_none());
+    }
+
+    #[test]
+    fn test_parse_ask_input_multiple_questions() {
+        let json = r#"{"type":"tool_use","name":"AskUserQuestion","input":{"questions":[{"question":"Q1","header":"H1","options":[{"label":"A"}],"multiSelect":false},{"question":"Q2","header":"H2","options":[{"label":"B"},{"label":"C"}],"multiSelect":true}]}}"#;
+        let block: ContentBlock = serde_json::from_str(json).unwrap();
+        let ask = block.parse_ask_input().unwrap();
+        assert_eq!(ask.questions.len(), 2);
+        assert_eq!(ask.questions[1].question, "Q2");
+        assert!(ask.questions[1].multi_select);
+    }
+
+    #[test]
+    fn test_content_block_input_ignored_for_non_tool_use() {
+        // input field on a text block should still deserialize fine
+        let json = r#"{"type":"text","text":"hello","input":{"foo":"bar"}}"#;
+        let block: ContentBlock = serde_json::from_str(json).unwrap();
+        assert_eq!(block.type_, "text");
+        assert!(block.input.is_some());
+        assert!(block.parse_ask_input().is_none());
     }
 }
