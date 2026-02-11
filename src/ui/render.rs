@@ -246,10 +246,6 @@ pub fn render_list(
                     .fg(status_color)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(
-                format!("Pane {}: ", pane.pane_id),
-                Style::default().fg(Color::White),
-            ),
             Span::raw(title),
             Span::styled(
                 format!(" [{}]", session.status.as_str()),
