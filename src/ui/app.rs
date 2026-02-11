@@ -80,7 +80,7 @@ pub struct App {
     animation_frame: u8,
     /// Current workspace name (for detecting cross-workspace jumps)
     current_workspace: String,
-    /// Details panel width percentage (default: 45, range: 20-80)
+    /// Details panel width percentage (default: 65, range: 20-80)
     details_width_percent: u16,
     /// Input mode (for sending prompts to sessions)
     input_mode: bool,
@@ -162,7 +162,7 @@ impl App {
             transcript_watcher: None,
             animation_frame: 0,
             current_workspace: String::new(),
-            details_width_percent: 45,
+            details_width_percent: 65,
             input_mode: false,
             input_buffer: InputBuffer::new(),
             toast,
