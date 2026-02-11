@@ -49,6 +49,16 @@ fn truncate_history_prompt(
     }
 }
 
+fn clamp_scroll_offset_for_render(
+    scroll_offset: usize,
+    content_height: usize,
+    viewport_height: usize,
+) -> usize {
+    let max_scroll = content_height.saturating_sub(viewport_height);
+    let renderable_max = max_scroll.min(u16::MAX as usize);
+    scroll_offset.min(renderable_max)
+}
+
 /// Render the history turn list in the details panel area.
 pub(super) fn render_history_list(
     f: &mut ratatui::Frame,
@@ -147,6 +157,24 @@ mod tests {
         let prompt = truncate_history_prompt("abcdefghij", 999, "1h", 8);
         assert_eq!(prompt, "...");
     }
+
+    #[test]
+    fn test_clamp_scroll_offset_for_render_normal_range() {
+        let clamped = clamp_scroll_offset_for_render(120, 500, 30);
+        assert_eq!(clamped, 120);
+    }
+
+    #[test]
+    fn test_clamp_scroll_offset_for_render_limited_by_content() {
+        let clamped = clamp_scroll_offset_for_render(9_999, 120, 20);
+        assert_eq!(clamped, 100);
+    }
+
+    #[test]
+    fn test_clamp_scroll_offset_for_render_limited_by_u16_max() {
+        let clamped = clamp_scroll_offset_for_render(usize::MAX, 200_000, 10);
+        assert_eq!(clamped, u16::MAX as usize);
+    }
 }
 
 /// Render details panel in history browsing mode.
@@ -216,9 +244,9 @@ pub(super) fn render_history_details(
 
     let content_height = lines.len();
     let viewport_height = area.height.saturating_sub(2) as usize;
-    let max_scroll = content_height.saturating_sub(viewport_height);
-    *scroll_offset = (*scroll_offset).min(max_scroll);
-    let clamped_offset = (*scroll_offset).min(u16::MAX as usize) as u16;
+    *scroll_offset =
+        clamp_scroll_offset_for_render(*scroll_offset, content_height, viewport_height);
+    let clamped_offset = *scroll_offset as u16;
 
     let title = format!(" History ({}/{}) ", turn_num, total);
     let paragraph = Paragraph::new(lines)
