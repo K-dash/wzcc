@@ -32,8 +32,8 @@ use super::event::{
 };
 use super::input_buffer::InputBuffer;
 use super::render::{
-    render_command_select, render_details, render_footer, render_list,
-    render_slash_complete, DetailMode, DetailsRenderCtx, LivePaneLinesCache,
+    render_command_select, render_details, render_footer, render_list, render_slash_complete,
+    DetailMode, DetailsRenderCtx, LivePaneLinesCache,
 };
 use super::session::ClaudeSession;
 use super::slash_commands::SlashCommand;

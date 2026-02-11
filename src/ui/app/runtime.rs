@@ -119,9 +119,7 @@ impl App {
                                 self.dirty |= self.input_buffer.backspace();
                                 self.update_slash_filter();
                             }
-                            KeyCode::Char('u')
-                                if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                            {
+                            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 self.input_buffer.clear();
                                 self.slash_complete_active = false;
                                 self.slash_filtered.clear();
@@ -139,9 +137,7 @@ impl App {
                             KeyCode::Esc => {
                                 self.exit_input_mode();
                             }
-                            KeyCode::Char('o')
-                                if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                            {
+                            KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 // Ctrl+O -> newline
                                 self.dirty |= self.input_buffer.insert_char('\n');
                             }
@@ -177,21 +173,15 @@ impl App {
                                 self.dirty |= self.input_buffer.cursor_end();
                                 self.update_slash_filter();
                             }
-                            KeyCode::Char('a')
-                                if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                            {
+                            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 self.dirty |= self.input_buffer.cursor_home();
                                 self.update_slash_filter();
                             }
-                            KeyCode::Char('e')
-                                if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                            {
+                            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 self.dirty |= self.input_buffer.cursor_end();
                                 self.update_slash_filter();
                             }
-                            KeyCode::Char('u')
-                                if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                            {
+                            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 if !self.input_buffer.is_empty() {
                                     self.input_buffer.clear();
                                     self.slash_complete_active = false;
@@ -199,27 +189,19 @@ impl App {
                                     self.dirty = true;
                                 }
                             }
-                            KeyCode::Char('h')
-                                if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                            {
+                            KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 self.dirty |= self.input_buffer.cursor_left();
                                 self.update_slash_filter();
                             }
-                            KeyCode::Char('j')
-                                if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                            {
+                            KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 self.dirty |= self.input_buffer.cursor_down();
                                 self.update_slash_filter();
                             }
-                            KeyCode::Char('k')
-                                if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                            {
+                            KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 self.dirty |= self.input_buffer.cursor_up();
                                 self.update_slash_filter();
                             }
-                            KeyCode::Char('l')
-                                if key.modifiers.contains(KeyModifiers::CONTROL) =>
-                            {
+                            KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                 self.dirty |= self.input_buffer.cursor_right();
                                 self.update_slash_filter();
                             }

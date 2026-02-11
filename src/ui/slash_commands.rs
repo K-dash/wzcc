@@ -86,7 +86,11 @@ fn extract_frontmatter(content: &str) -> Option<&str> {
 
 /// Parse a SKILL.md file into a SlashCommand.
 /// Returns None if the file is invalid or user-invocable is false.
-fn parse_skill_file(content: &str, dir_name: &str, source: SlashCommandSource) -> Option<SlashCommand> {
+fn parse_skill_file(
+    content: &str,
+    dir_name: &str,
+    source: SlashCommandSource,
+) -> Option<SlashCommand> {
     let yaml_block = extract_frontmatter(content)?;
     let fm: SkillFrontmatter = serde_yaml::from_str(yaml_block).ok()?;
 
@@ -109,7 +113,11 @@ fn parse_skill_file(content: &str, dir_name: &str, source: SlashCommandSource) -
 /// Parse a legacy command .md file into a SlashCommand.
 /// The filename (without .md) becomes the command name.
 /// Subdirectory paths use `:` as separator (e.g. "frontend:component").
-fn parse_command_file(content: &str, relative_name: &str, source: SlashCommandSource) -> SlashCommand {
+fn parse_command_file(
+    content: &str,
+    relative_name: &str,
+    source: SlashCommandSource,
+) -> SlashCommand {
     // Use first non-empty line (stripped of heading markers) as description
     let description = content
         .lines()
@@ -141,10 +149,7 @@ fn scan_skills_dir(dir: &Path, source: SlashCommandSource) -> Vec<SlashCommand> 
         if !skill_file.is_file() {
             continue;
         }
-        let dir_name = entry
-            .file_name()
-            .to_string_lossy()
-            .to_string();
+        let dir_name = entry.file_name().to_string_lossy().to_string();
         let content = match std::fs::read_to_string(&skill_file) {
             Ok(c) => c,
             Err(_) => continue,
@@ -232,7 +237,10 @@ fn scan_installed_plugins() -> Vec<SlashCommand> {
         Some(h) => h,
         None => return Vec::new(),
     };
-    let plugins_file = home.join(".claude").join("plugins").join("installed_plugins.json");
+    let plugins_file = home
+        .join(".claude")
+        .join("plugins")
+        .join("installed_plugins.json");
     let content = match std::fs::read_to_string(&plugins_file) {
         Ok(c) => c,
         Err(_) => return Vec::new(),
@@ -246,10 +254,7 @@ fn scan_installed_plugins() -> Vec<SlashCommand> {
 
     for (qualified_name, entries) in &installed.plugins {
         // Extract plugin display name: "Notion@claude-plugins-official" -> "Notion"
-        let plugin_name = qualified_name
-            .split('@')
-            .next()
-            .unwrap_or(qualified_name);
+        let plugin_name = qualified_name.split('@').next().unwrap_or(qualified_name);
 
         for entry in entries {
             let install_path = Path::new(&entry.install_path);
@@ -407,7 +412,8 @@ mod tests {
 
     #[test]
     fn test_parse_skill_file_basic() {
-        let content = "---\nname: my-skill\ndescription: Does something cool\n---\n\nInstructions here";
+        let content =
+            "---\nname: my-skill\ndescription: Does something cool\n---\n\nInstructions here";
         let cmd = parse_skill_file(content, "fallback", SlashCommandSource::UserSkill);
         assert!(cmd.is_some());
         let cmd = cmd.unwrap();
@@ -440,7 +446,8 @@ mod tests {
 
     #[test]
     fn test_parse_skill_file_description_with_colon() {
-        let content = "---\nname: my-tool\ndescription: \"Use when: the user asks for help\"\n---\n\nBody";
+        let content =
+            "---\nname: my-tool\ndescription: \"Use when: the user asks for help\"\n---\n\nBody";
         let cmd = parse_skill_file(content, "my-tool", SlashCommandSource::UserSkill).unwrap();
         assert_eq!(cmd.description, "Use when: the user asks for help");
     }
@@ -470,7 +477,9 @@ mod tests {
     fn test_scan_slash_commands_sorted() {
         let commands = scan_slash_commands(None);
         // All built-ins should come first
-        let first_non_builtin = commands.iter().position(|c| c.source != SlashCommandSource::BuiltIn);
+        let first_non_builtin = commands
+            .iter()
+            .position(|c| c.source != SlashCommandSource::BuiltIn);
         if let Some(pos) = first_non_builtin {
             // Everything before should be built-in
             for c in &commands[..pos] {
@@ -496,7 +505,8 @@ mod tests {
         fs::write(
             skill_dir.join("SKILL.md"),
             "---\nname: my-skill\ndescription: Test skill\n---\n\nBody",
-        ).unwrap();
+        )
+        .unwrap();
 
         let commands = scan_skills_dir(tmp.path(), SlashCommandSource::UserSkill);
         assert_eq!(commands.len(), 1);

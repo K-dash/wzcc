@@ -48,14 +48,12 @@ pub(super) fn render_slash_complete(
         .iter()
         .filter_map(|&idx| commands.get(idx))
         .map(|cmd| {
-            let mut spans = vec![
-                Span::styled(
-                    format!("/{}", cmd.name),
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ];
+            let mut spans = vec![Span::styled(
+                format!("/{}", cmd.name),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )];
 
             if let Some(hint) = &cmd.argument_hint {
                 spans.push(Span::styled(
