@@ -180,6 +180,18 @@ impl InputBuffer {
         }
     }
 
+    /// Replace a byte range in the buffer with the given string.
+    /// Cursor is placed at the end of the replacement.
+    /// Both `start` and `end` must be valid UTF-8 character boundaries.
+    pub fn replace_range(&mut self, start: usize, end: usize, replacement: &str) {
+        debug_assert!(start <= end);
+        debug_assert!(end <= self.buffer.len());
+        debug_assert!(self.buffer.is_char_boundary(start));
+        debug_assert!(self.buffer.is_char_boundary(end));
+        self.buffer.replace_range(start..end, replacement);
+        self.cursor = start + replacement.len();
+    }
+
     /// Snap a byte position to the nearest valid UTF-8 character boundary
     /// at or before the given position.
     fn snap_to_char_boundary(&self, pos: usize) -> usize {
@@ -654,5 +666,53 @@ mod tests {
         buf.insert_str("日本語");
         assert_eq!(buf.as_str(), "日本語");
         assert_eq!(buf.cursor(), 9); // 3 chars * 3 bytes
+    }
+
+    // --- replace_range ---
+
+    #[test]
+    fn test_replace_range_basic() {
+        let mut buf = InputBuffer::new();
+        buf.insert_str("/com");
+        buf.replace_range(0, 4, "/compact ");
+        assert_eq!(buf.as_str(), "/compact ");
+        assert_eq!(buf.cursor(), 9);
+    }
+
+    #[test]
+    fn test_replace_range_at_start() {
+        let mut buf = InputBuffer::new();
+        buf.insert_str("hello world");
+        buf.replace_range(0, 5, "hi");
+        assert_eq!(buf.as_str(), "hi world");
+        assert_eq!(buf.cursor(), 2);
+    }
+
+    #[test]
+    fn test_replace_range_at_end() {
+        let mut buf = InputBuffer::new();
+        buf.insert_str("hello");
+        buf.replace_range(5, 5, " world");
+        assert_eq!(buf.as_str(), "hello world");
+        assert_eq!(buf.cursor(), 11);
+    }
+
+    #[test]
+    fn test_replace_range_deletion() {
+        let mut buf = InputBuffer::new();
+        buf.insert_str("hello world");
+        buf.replace_range(5, 11, "");
+        assert_eq!(buf.as_str(), "hello");
+        assert_eq!(buf.cursor(), 5);
+    }
+
+    #[test]
+    fn test_replace_range_multibyte() {
+        let mut buf = InputBuffer::new();
+        buf.insert_str("/日本");
+        // Replace from byte 1 (after /) to byte 7 (end of 日本)
+        buf.replace_range(1, 7, "compact ");
+        assert_eq!(buf.as_str(), "/compact ");
+        assert_eq!(buf.cursor(), 9);
     }
 }

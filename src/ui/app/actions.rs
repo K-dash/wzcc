@@ -5,6 +5,19 @@ impl App {
         if self.list_state.selected().is_some() && !self.sessions.is_empty() {
             self.input_mode = true;
             self.input_buffer.clear();
+
+            // Scan slash commands for the selected session's CWD
+            let session_cwd = self
+                .list_state
+                .selected()
+                .and_then(|i| self.sessions.get(i))
+                .and_then(|s| s.pane.cwd_path());
+            self.slash_commands =
+                crate::ui::slash_commands::scan_slash_commands(session_cwd.as_deref());
+            self.slash_filtered.clear();
+            self.slash_complete_active = false;
+            self.slash_complete_state.select(Some(0));
+
             self.dirty = true;
             self.needs_full_redraw = true;
         }
@@ -14,8 +27,73 @@ impl App {
     pub(super) fn exit_input_mode(&mut self) {
         self.input_mode = false;
         self.input_buffer.clear();
+        self.slash_commands.clear();
+        self.slash_filtered.clear();
+        self.slash_complete_active = false;
         self.dirty = true;
         self.needs_full_redraw = true;
+    }
+
+    /// Extract the slash command prefix from the current line at cursor position.
+    /// Returns the text after `/` if the current line starts with `/` and has no spaces.
+    pub(super) fn slash_prefix(&self) -> Option<&str> {
+        let buf = self.input_buffer.as_str();
+        let cursor = self.input_buffer.cursor();
+        let line_start = buf[..cursor].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let line_to_cursor = &buf[line_start..cursor];
+        if line_to_cursor.starts_with('/') && !line_to_cursor[1..].contains(' ') {
+            Some(&line_to_cursor[1..])
+        } else {
+            None
+        }
+    }
+
+    /// Update the slash command filter based on current input.
+    pub(super) fn update_slash_filter(&mut self) {
+        if let Some(prefix) = self.slash_prefix() {
+            let prefix_owned = prefix.to_string();
+            self.slash_filtered = self
+                .slash_commands
+                .iter()
+                .enumerate()
+                .filter(|(_, cmd)| cmd.name.starts_with(&prefix_owned))
+                .map(|(i, _)| i)
+                .collect();
+
+            if self.slash_filtered.is_empty() {
+                self.slash_complete_active = false;
+            } else {
+                self.slash_complete_active = true;
+                // Clamp selection index
+                let max = self.slash_filtered.len().saturating_sub(1);
+                let current = self.slash_complete_state.selected().unwrap_or(0);
+                if current > max {
+                    self.slash_complete_state.select(Some(0));
+                }
+            }
+        } else {
+            self.slash_complete_active = false;
+            self.slash_filtered.clear();
+        }
+        self.dirty = true;
+    }
+
+    /// Accept the currently selected slash command completion.
+    pub(super) fn accept_slash_completion(&mut self) {
+        let selected = self.slash_complete_state.selected().unwrap_or(0);
+        if let Some(&cmd_idx) = self.slash_filtered.get(selected) {
+            if let Some(cmd) = self.slash_commands.get(cmd_idx) {
+                let replacement = format!("/{} ", cmd.name);
+                let buf = self.input_buffer.as_str();
+                let cursor = self.input_buffer.cursor();
+                let line_start = buf[..cursor].rfind('\n').map(|i| i + 1).unwrap_or(0);
+                self.input_buffer
+                    .replace_range(line_start, cursor, &replacement);
+            }
+        }
+        self.slash_complete_active = false;
+        self.slash_filtered.clear();
+        self.dirty = true;
     }
 
     /// Send prompt to the selected session

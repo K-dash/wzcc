@@ -77,73 +77,165 @@ impl App {
             match event_handler.next()? {
                 Event::Key(key) if self.input_mode => {
                     // Input mode key handling
-                    match key.code {
-                        KeyCode::Esc => {
-                            self.exit_input_mode();
-                        }
-                        KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            // Ctrl+O -> newline
-                            self.dirty |= self.input_buffer.insert_char('\n');
-                        }
-                        KeyCode::Enter => {
-                            // Enter -> submit
-                            self.send_prompt()?;
-                        }
-                        KeyCode::Backspace => {
-                            self.dirty |= self.input_buffer.backspace();
-                        }
-                        KeyCode::Left => {
-                            self.dirty |= self.input_buffer.cursor_left();
-                        }
-                        KeyCode::Right => {
-                            self.dirty |= self.input_buffer.cursor_right();
-                        }
-                        KeyCode::Up => {
-                            self.dirty |= self.input_buffer.cursor_up();
-                        }
-                        KeyCode::Down => {
-                            self.dirty |= self.input_buffer.cursor_down();
-                        }
-                        KeyCode::Home => {
-                            self.dirty |= self.input_buffer.cursor_home();
-                        }
-                        KeyCode::End => {
-                            self.dirty |= self.input_buffer.cursor_end();
-                        }
-                        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            self.dirty |= self.input_buffer.cursor_home();
-                        }
-                        KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            self.dirty |= self.input_buffer.cursor_end();
-                        }
-                        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            if !self.input_buffer.is_empty() {
-                                self.input_buffer.clear();
+                    if self.slash_complete_active {
+                        // Slash autocomplete is active: intercept navigation keys
+                        match key.code {
+                            KeyCode::Esc => {
+                                // Dismiss autocomplete only, stay in input mode
+                                self.slash_complete_active = false;
+                                self.slash_filtered.clear();
                                 self.dirty = true;
                             }
+                            KeyCode::Tab | KeyCode::Enter => {
+                                // Accept the selected completion
+                                self.accept_slash_completion();
+                            }
+                            KeyCode::Up | KeyCode::Char('k')
+                                if key.code == KeyCode::Up
+                                    || key.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                // Navigate up in autocomplete list
+                                if let Some(i) = self.slash_complete_state.selected() {
+                                    if i > 0 {
+                                        self.slash_complete_state.select(Some(i - 1));
+                                        self.dirty = true;
+                                    }
+                                }
+                            }
+                            KeyCode::Down | KeyCode::Char('j')
+                                if key.code == KeyCode::Down
+                                    || key.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                // Navigate down in autocomplete list
+                                if let Some(i) = self.slash_complete_state.selected() {
+                                    let max = self.slash_filtered.len().saturating_sub(1);
+                                    if i < max {
+                                        self.slash_complete_state.select(Some(i + 1));
+                                        self.dirty = true;
+                                    }
+                                }
+                            }
+                            KeyCode::Backspace => {
+                                self.dirty |= self.input_buffer.backspace();
+                                self.update_slash_filter();
+                            }
+                            KeyCode::Char('u')
+                                if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                self.input_buffer.clear();
+                                self.slash_complete_active = false;
+                                self.slash_filtered.clear();
+                                self.dirty = true;
+                            }
+                            KeyCode::Char(c) => {
+                                self.dirty |= self.input_buffer.insert_char(c);
+                                self.update_slash_filter();
+                            }
+                            _ => {}
                         }
-                        KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            self.dirty |= self.input_buffer.cursor_left();
+                    } else {
+                        // Normal input mode (no autocomplete active)
+                        match key.code {
+                            KeyCode::Esc => {
+                                self.exit_input_mode();
+                            }
+                            KeyCode::Char('o')
+                                if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                // Ctrl+O -> newline
+                                self.dirty |= self.input_buffer.insert_char('\n');
+                            }
+                            KeyCode::Enter => {
+                                // Enter -> submit
+                                self.send_prompt()?;
+                            }
+                            KeyCode::Backspace => {
+                                self.dirty |= self.input_buffer.backspace();
+                                self.update_slash_filter();
+                            }
+                            KeyCode::Left => {
+                                self.dirty |= self.input_buffer.cursor_left();
+                                self.update_slash_filter();
+                            }
+                            KeyCode::Right => {
+                                self.dirty |= self.input_buffer.cursor_right();
+                                self.update_slash_filter();
+                            }
+                            KeyCode::Up => {
+                                self.dirty |= self.input_buffer.cursor_up();
+                                self.update_slash_filter();
+                            }
+                            KeyCode::Down => {
+                                self.dirty |= self.input_buffer.cursor_down();
+                                self.update_slash_filter();
+                            }
+                            KeyCode::Home => {
+                                self.dirty |= self.input_buffer.cursor_home();
+                                self.update_slash_filter();
+                            }
+                            KeyCode::End => {
+                                self.dirty |= self.input_buffer.cursor_end();
+                                self.update_slash_filter();
+                            }
+                            KeyCode::Char('a')
+                                if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                self.dirty |= self.input_buffer.cursor_home();
+                                self.update_slash_filter();
+                            }
+                            KeyCode::Char('e')
+                                if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                self.dirty |= self.input_buffer.cursor_end();
+                                self.update_slash_filter();
+                            }
+                            KeyCode::Char('u')
+                                if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                if !self.input_buffer.is_empty() {
+                                    self.input_buffer.clear();
+                                    self.slash_complete_active = false;
+                                    self.slash_filtered.clear();
+                                    self.dirty = true;
+                                }
+                            }
+                            KeyCode::Char('h')
+                                if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                self.dirty |= self.input_buffer.cursor_left();
+                                self.update_slash_filter();
+                            }
+                            KeyCode::Char('j')
+                                if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                self.dirty |= self.input_buffer.cursor_down();
+                                self.update_slash_filter();
+                            }
+                            KeyCode::Char('k')
+                                if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                self.dirty |= self.input_buffer.cursor_up();
+                                self.update_slash_filter();
+                            }
+                            KeyCode::Char('l')
+                                if key.modifiers.contains(KeyModifiers::CONTROL) =>
+                            {
+                                self.dirty |= self.input_buffer.cursor_right();
+                                self.update_slash_filter();
+                            }
+                            KeyCode::Char(c) => {
+                                self.dirty |= self.input_buffer.insert_char(c);
+                                self.update_slash_filter();
+                            }
+                            _ => {}
                         }
-                        KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            self.dirty |= self.input_buffer.cursor_down();
-                        }
-                        KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            self.dirty |= self.input_buffer.cursor_up();
-                        }
-                        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            self.dirty |= self.input_buffer.cursor_right();
-                        }
-                        KeyCode::Char(c) => {
-                            self.dirty |= self.input_buffer.insert_char(c);
-                        }
-                        _ => {}
                     }
                 }
                 Event::Paste(text) if self.input_mode => {
                     // Normalize line endings and insert pasted text
                     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
                     self.dirty |= self.input_buffer.insert_str(&normalized);
+                    self.update_slash_filter();
                 }
                 Event::Key(key) if self.kill_confirm.is_some() => {
                     // Kill confirmation mode key handling
@@ -664,7 +756,19 @@ impl App {
             self.kill_confirm.as_ref(),
             self.add_pane_pending.as_ref(),
             self.command_select_pending.is_some(),
+            self.slash_complete_active,
         );
+
+        // Render slash command autocomplete popup (anchored to details area)
+        if self.slash_complete_active && self.input_mode {
+            render_slash_complete(
+                f,
+                chunks[1],
+                &self.slash_commands,
+                &self.slash_filtered,
+                &mut self.slash_complete_state,
+            );
+        }
 
         // Render command selection popup overlay (on top of everything)
         if self.command_select_pending.is_some() {

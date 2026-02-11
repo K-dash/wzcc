@@ -16,6 +16,8 @@ mod footer;
 mod history;
 #[path = "render/live.rs"]
 mod live;
+#[path = "render/slash_complete.rs"]
+mod slash_complete;
 #[path = "render/summary.rs"]
 mod summary;
 
@@ -161,6 +163,7 @@ pub fn render_footer(
     kill_confirm: Option<&(u32, String)>,
     add_pane_pending: Option<&(u32, String, u32)>,
     command_select_active: bool,
+    slash_complete_active: bool,
 ) {
     footer::render_footer(
         f,
@@ -171,6 +174,7 @@ pub fn render_footer(
         kill_confirm,
         add_pane_pending,
         command_select_active,
+        slash_complete_active,
     );
 }
 
@@ -182,4 +186,15 @@ pub fn render_command_select(
     list_state: &mut ListState,
 ) {
     command_select::render_command_select(f, area, commands, list_state);
+}
+
+/// Render the slash command autocomplete popup overlay.
+pub fn render_slash_complete(
+    f: &mut ratatui::Frame,
+    details_area: Rect,
+    commands: &[crate::ui::slash_commands::SlashCommand],
+    filtered: &[usize],
+    list_state: &mut ListState,
+) {
+    slash_complete::render_slash_complete(f, details_area, commands, filtered, list_state);
 }

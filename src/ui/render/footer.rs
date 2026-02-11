@@ -20,6 +20,7 @@ pub(super) fn render_footer(
     kill_confirm: Option<&(u32, String)>,
     add_pane_pending: Option<&(u32, String, u32)>,
     command_select_active: bool,
+    slash_complete_active: bool,
 ) {
     if let Some(toast) = toast {
         let (color, prefix) = match toast.toast_type {
@@ -120,7 +121,31 @@ pub(super) fn render_footer(
         return;
     }
 
-    let help_text = if detail_mode == DetailMode::HistoryList {
+    let help_text = if slash_complete_active {
+        Line::from(vec![
+            Span::styled(
+                "[↑↓]",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Select "),
+            Span::styled(
+                "[Tab/Enter]",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Accept "),
+            Span::styled(
+                "[Esc]",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("Dismiss"),
+        ])
+    } else if detail_mode == DetailMode::HistoryList {
         Line::from(vec![
             Span::styled("[jk]", Style::default().fg(Color::Yellow)),
             Span::raw("Select "),
