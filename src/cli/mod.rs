@@ -278,10 +278,20 @@ impl WeztermCli {
 
     /// Retrieve the textual content of a pane including ANSI escape sequences.
     /// Returns the raw stdout bytes because `ansi-to-tui` works with `&[u8]`.
-    pub fn get_text(pane_id: u32) -> Result<Vec<u8>> {
+    /// When `scrollback` is true the full scrollback buffer is included.
+    pub fn get_text(pane_id: u32, scrollback: bool) -> Result<Vec<u8>> {
         let pane_id_str = pane_id.to_string();
+        let mut args = vec!["cli", "get-text", "--pane-id", &pane_id_str, "--escapes"];
+        // A large negative start-line value fetches the entire scrollback
+        // buffer. wezterm clamps it to the actual scrollback size.
+        let start_line;
+        if scrollback {
+            start_line = "-10000".to_string();
+            args.push("--start-line");
+            args.push(&start_line);
+        }
         let output = run_wezterm_cli(
-            &["cli", "get-text", "--pane-id", &pane_id_str, "--escapes"],
+            &args,
             WEZTERM_CLI_TIMEOUT_SLOW,
             &format!("cli get-text --pane-id {} --escapes", pane_id),
         )?;
@@ -499,7 +509,7 @@ mod tests {
         let panes = ds.list_panes().unwrap();
 
         if let Some(pane) = panes.iter().find(|p| p.is_active) {
-            let result = WeztermCli::get_text(pane.pane_id);
+            let result = WeztermCli::get_text(pane.pane_id, false);
             assert!(result.is_ok());
             assert!(!result.unwrap().is_empty());
         }
@@ -523,7 +533,7 @@ mod tests {
     #[test]
     #[ignore]
     fn test_get_text_nonexistent_pane() {
-        let result = WeztermCli::get_text(99999);
+        let result = WeztermCli::get_text(99999, false);
         assert!(result.is_err());
     }
 }
