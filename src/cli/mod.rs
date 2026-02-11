@@ -9,12 +9,52 @@ pub use install_workspace_switcher::{
 use anyhow::{Context, Result};
 use std::io::Read;
 use std::process::{Command, Output, Stdio};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
 const WEZTERM_CLI_TIMEOUT_DEFAULT: Duration = Duration::from_secs(3);
 const WEZTERM_CLI_TIMEOUT_SLOW: Duration = Duration::from_secs(8);
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
+const PIPE_RECV_TIMEOUT: Duration = Duration::from_millis(200);
+
+fn spawn_pipe_reader<R>(mut reader: R) -> Receiver<std::io::Result<Vec<u8>>>
+where
+    R: Read + Send + 'static,
+{
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut out = Vec::new();
+        let result = reader.read_to_end(&mut out).map(|_| out);
+        let _ = tx.send(result);
+    });
+    rx
+}
+
+fn recv_pipe_output(
+    rx: Receiver<std::io::Result<Vec<u8>>>,
+    stream_name: &str,
+    program: &str,
+    action: &str,
+) -> Result<Vec<u8>> {
+    match rx.recv_timeout(PIPE_RECV_TIMEOUT) {
+        Ok(Ok(buf)) => Ok(buf),
+        Ok(Err(err)) => Err(err)
+            .with_context(|| format!("Failed reading {} from {} {}", stream_name, program, action)),
+        Err(RecvTimeoutError::Timeout) => anyhow::bail!(
+            "Timed out while collecting {} from {} {}",
+            stream_name,
+            program,
+            action
+        ),
+        Err(RecvTimeoutError::Disconnected) => anyhow::bail!(
+            "Reader thread terminated unexpectedly while collecting {} from {} {}",
+            stream_name,
+            program,
+            action
+        ),
+    }
+}
 
 fn run_command_with_timeout(
     program: &str,
@@ -29,24 +69,16 @@ fn run_command_with_timeout(
         .spawn()
         .with_context(|| format!("Failed to start {} {}", program, action))?;
 
-    let mut child_stdout = child
+    let child_stdout = child
         .stdout
         .take()
         .context("Failed to capture child stdout pipe")?;
-    let mut child_stderr = child
+    let child_stderr = child
         .stderr
         .take()
         .context("Failed to capture child stderr pipe")?;
-    let stdout_handle = thread::spawn(move || {
-        let mut out = Vec::new();
-        let _ = child_stdout.read_to_end(&mut out);
-        out
-    });
-    let stderr_handle = thread::spawn(move || {
-        let mut out = Vec::new();
-        let _ = child_stderr.read_to_end(&mut out);
-        out
-    });
+    let stdout_rx = spawn_pipe_reader(child_stdout);
+    let stderr_rx = spawn_pipe_reader(child_stderr);
 
     let start = Instant::now();
     let mut timed_out = false;
@@ -69,9 +101,6 @@ fn run_command_with_timeout(
         thread::sleep(POLL_INTERVAL);
     };
 
-    let stdout: Vec<u8> = stdout_handle.join().unwrap_or_default();
-    let stderr: Vec<u8> = stderr_handle.join().unwrap_or_default();
-
     if timed_out {
         anyhow::bail!(
             "{} {} timed out after {}ms",
@@ -80,6 +109,9 @@ fn run_command_with_timeout(
             timeout.as_millis()
         );
     }
+
+    let stdout = recv_pipe_output(stdout_rx, "stdout", program, action)?;
+    let stderr = recv_pipe_output(stderr_rx, "stderr", program, action)?;
 
     if !status.success() {
         let stderr = String::from_utf8_lossy(&stderr).trim().to_string();
@@ -313,7 +345,7 @@ fn parse_pane_id(stdout: &str) -> Result<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn test_shell_quote_simple() {
@@ -413,6 +445,22 @@ mod tests {
         )
         .unwrap();
         assert!(output.stdout.len() > 50_000);
+    }
+
+    #[test]
+    fn test_run_command_with_timeout_pipe_held_by_descendant_returns_quickly() {
+        let started = Instant::now();
+        let err = run_command_with_timeout(
+            "/bin/sh",
+            &["-c", "(sleep 2) & exit 0"],
+            Duration::from_secs(1),
+            "test-held-pipe",
+        )
+        .unwrap_err();
+        let elapsed = started.elapsed();
+        let msg = err.to_string();
+        assert!(msg.contains("Timed out while collecting stdout"));
+        assert!(elapsed < Duration::from_secs(1));
     }
 
     #[test]
