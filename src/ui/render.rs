@@ -1099,12 +1099,44 @@ fn render_live_pane(
     f.render_widget(paragraph, area);
 }
 
+/// Remove SCS (Select Character Set) escape sequences from raw bytes.
+///
+/// Terminals commonly emit `ESC ( C` or `ESC ) C` (where `C` is a single character such
+/// as `B` for US-ASCII) to designate character sets into G0/G1.  The `ansi-to-tui` crate
+/// does not recognise these sequences and leaves the trailing characters (e.g. `(B`) as
+/// visible text.  We strip them here so they never reach the parser.
+fn strip_scs_sequences(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == 0x1b
+            && i + 2 < bytes.len()
+            && (bytes[i + 1] == b'(' || bytes[i + 1] == b')')
+            && (0x20..=0x7E).contains(&bytes[i + 2])
+        {
+            // Skip ESC, '(' or ')', and the printable designator character
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
 /// Convert ANSI-escaped bytes to ratatui Lines using ansi-to-tui.
 ///
 /// `ansi-to-tui` depends on `ratatui-core` which defines its own `Line`/`Span`/`Style`
 /// types, separate from `ratatui 0.29`. We bridge the gap by converting field-by-field.
 fn ansi_bytes_to_lines(bytes: &[u8]) -> Vec<Line<'static>> {
     use ansi_to_tui::IntoText as _;
+
+    // Strip SCS (Select Character Set) sequences that ansi-to-tui does not handle.
+    // Terminals emit ESC(B (designate US-ASCII to G0) as part of style resets;
+    // the parser eats ESC but leaves "(B" as literal text.  Remove them up front.
+    let cleaned: Vec<u8> = strip_scs_sequences(bytes);
+    let bytes = cleaned.as_slice();
+
     match bytes.into_text() {
         Ok(text) => text
             .lines
@@ -1342,6 +1374,43 @@ mod tests {
             .find(|s| s.content.contains("orange"))
             .unwrap();
         assert_eq!(span.style.fg, Some(Color::Rgb(255, 128, 0)));
+    }
+
+    #[test]
+    fn test_ansi_bytes_to_lines_strips_scs_esc_b() {
+        // ESC(B (designate US-ASCII to G0) should be stripped, not rendered as "(B"
+        let bytes = b"hello\x1b(B world";
+        let lines = ansi_bytes_to_lines(bytes);
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(text, "hello world");
+        assert!(!text.contains("(B"));
+    }
+
+    #[test]
+    fn test_ansi_bytes_to_lines_strips_scs_esc_paren_zero() {
+        // ESC)0 (designate DEC Special Graphics to G1) should also be stripped
+        let bytes = b"foo\x1b)0bar";
+        let lines = ansi_bytes_to_lines(bytes);
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(text, "foobar");
+        assert!(!text.contains(")0"));
+    }
+
+    #[test]
+    fn test_strip_scs_ignores_invalid_designator() {
+        // If the 3rd byte is outside printable range, don't strip
+        let bytes = b"a\x1b(\x01z";
+        let result = strip_scs_sequences(bytes);
+        // ESC should be stripped by other means or kept, but '(' and \x01 must survive
+        assert_eq!(result, b"a\x1b(\x01z");
     }
 
     // --- convert_color tests ---
