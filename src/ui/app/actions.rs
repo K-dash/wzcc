@@ -481,6 +481,7 @@ impl App {
                 // Start at the bottom so the most recent output is visible.
                 // The render function clamps this to max_scroll.
                 self.live_pane_scroll_offset = usize::MAX;
+                self.live_pane_follow_tail = true;
                 self.cached_live_pane_lines = None;
                 self.live_pane_poll_failures = 0;
                 // Force immediate first fetch
@@ -503,6 +504,7 @@ impl App {
         self.live_pane_bytes = None;
         self.live_pane_bytes_hash = 0;
         self.live_pane_scroll_offset = 0;
+        self.live_pane_follow_tail = true;
         self.cached_live_pane_lines = None;
         self.live_pane_poll_failures = 0;
         self.pending_g = false;
@@ -551,9 +553,10 @@ impl App {
                             self.live_pane_bytes_hash = new_hash;
                             self.live_pane_bytes = Some(bytes);
                             self.cached_live_pane_lines = None; // Invalidate render cache
-                            if first_fetch {
-                                // Jump to the bottom so the latest output is
-                                // visible; render clamps to max_scroll.
+                            if self.live_pane_follow_tail {
+                                // Keep viewport pinned to the bottom so new
+                                // output is always visible; render clamps to
+                                // max_scroll.
                                 self.live_pane_scroll_offset = usize::MAX;
                             }
                             self.dirty = true;
