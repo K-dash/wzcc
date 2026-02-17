@@ -639,6 +639,7 @@ impl App {
                 self.answer_select_pending = Some(AnswerSelectState {
                     pane_id,
                     title: "Plan Approval (ExitPlanMode)".into(),
+                    prompt_kind: AnswerPromptKind::PlanApproval,
                     options: vec![
                         AnswerOption {
                             label: "Yes, clear & bypass".into(),
@@ -702,6 +703,7 @@ impl App {
                 self.answer_select_pending = Some(AnswerSelectState {
                     pane_id,
                     title: question.question.clone(),
+                    prompt_kind: AnswerPromptKind::Ask,
                     options,
                 });
                 self.answer_select_state.select(Some(0));
@@ -712,6 +714,7 @@ impl App {
                 self.answer_select_pending = Some(AnswerSelectState {
                     pane_id,
                     title,
+                    prompt_kind: AnswerPromptKind::ToolPermission,
                     options: vec![
                         AnswerOption {
                             label: "Allow".into(),
@@ -741,27 +744,41 @@ impl App {
 
     /// Confirm the selected answer and send the keystroke to the pane.
     pub(super) fn confirm_answer_select(&mut self, index: usize) {
+        use crate::transcript::WaitingPrompt;
         if let Some(state) = self.answer_select_pending.take() {
             if let Some(option) = state.options.get(index) {
-                // Re-check that the session is still waiting
+                // Re-check that the session is still waiting and prompt type matches
                 let session_idx = self
                     .sessions
                     .iter()
                     .position(|s| s.pane.pane_id == state.pane_id);
-                let still_waiting =
-                    session_idx
-                        .and_then(|i| self.sessions.get(i))
-                        .is_some_and(|s| {
-                            matches!(
-                                s.status,
-                                crate::transcript::SessionStatus::WaitingForUser { .. }
+                let current_session = session_idx.and_then(|i| self.sessions.get(i));
+                let still_waiting = current_session.is_some_and(|s| {
+                    matches!(
+                        s.status,
+                        crate::transcript::SessionStatus::WaitingForUser { .. }
+                    )
+                });
+                let prompt_matches = current_session.is_some_and(|s| {
+                    matches!(
+                        (&s.waiting_prompt, state.prompt_kind),
+                        (
+                            Some(WaitingPrompt::PlanApproval),
+                            AnswerPromptKind::PlanApproval
+                        ) | (Some(WaitingPrompt::Ask(_)), AnswerPromptKind::Ask)
+                            | (
+                                Some(WaitingPrompt::ToolPermission { .. }),
+                                AnswerPromptKind::ToolPermission,
                             )
-                        });
+                    )
+                });
 
                 if !still_waiting {
                     self.toast = Some(Toast::error(
                         "Session is no longer waiting for input".into(),
                     ));
+                } else if !prompt_matches {
+                    self.toast = Some(Toast::error("Prompt type changed — please retry".into()));
                 } else {
                     match WeztermCli::send_keystroke(state.pane_id, &option.keystroke) {
                         Ok(()) => {
