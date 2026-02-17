@@ -636,8 +636,38 @@ impl App {
 
         match waiting {
             WaitingPrompt::PlanApproval => {
-                // Jump to pane immediately (user handles Shift+Tab for plan mode)
-                let _ = self.jump_to_selected();
+                self.answer_select_pending = Some(AnswerSelectState {
+                    pane_id,
+                    title: "Plan Approval (ExitPlanMode)".into(),
+                    options: vec![
+                        AnswerOption {
+                            label: "Yes, clear & bypass".into(),
+                            description: Some("Clear context and bypass permissions".into()),
+                            keystroke: "1".into(),
+                            enter_input_after: false,
+                        },
+                        AnswerOption {
+                            label: "Yes, bypass".into(),
+                            description: Some("Bypass permissions".into()),
+                            keystroke: "2".into(),
+                            enter_input_after: false,
+                        },
+                        AnswerOption {
+                            label: "Yes, approve edits".into(),
+                            description: Some("Manually approve edits".into()),
+                            keystroke: "3".into(),
+                            enter_input_after: false,
+                        },
+                        AnswerOption {
+                            label: "Tell Claude".into(),
+                            description: Some("Type feedback for Claude".into()),
+                            keystroke: "4".into(),
+                            enter_input_after: true,
+                        },
+                    ],
+                });
+                self.answer_select_state.select(Some(0));
+                self.dirty = true;
             }
             WaitingPrompt::Ask(ask_input) => {
                 let Some(question) = ask_input.questions.first() else {
@@ -660,6 +690,7 @@ impl App {
                         label: opt.label.clone(),
                         description: opt.description.clone(),
                         keystroke: (i + 1).to_string(),
+                        enter_input_after: false,
                     })
                     .collect();
 
@@ -686,16 +717,19 @@ impl App {
                             label: "Allow".into(),
                             description: Some("Allow this tool call".into()),
                             keystroke: "1".into(),
+                            enter_input_after: false,
                         },
                         AnswerOption {
                             label: "Always allow".into(),
                             description: Some("Allow all future calls of this tool".into()),
                             keystroke: "2".into(),
+                            enter_input_after: false,
                         },
                         AnswerOption {
                             label: "Reject".into(),
                             description: Some("Deny this tool call".into()),
                             keystroke: "3".into(),
+                            enter_input_after: false,
                         },
                     ],
                 });
@@ -731,10 +765,15 @@ impl App {
                 } else {
                     match WeztermCli::send_keystroke(state.pane_id, &option.keystroke) {
                         Ok(()) => {
-                            self.toast = Some(Toast::success(format!(
-                                "Sent '{}' to Pane {}",
-                                option.label, state.pane_id
-                            )));
+                            if option.enter_input_after {
+                                // Enter i-mode so user can type follow-up text
+                                self.enter_input_mode();
+                            } else {
+                                self.toast = Some(Toast::success(format!(
+                                    "Sent '{}' to Pane {}",
+                                    option.label, state.pane_id
+                                )));
+                            }
                         }
                         Err(e) => {
                             self.toast = Some(Toast::error(format!("Failed to send: {}", e)));

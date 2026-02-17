@@ -179,6 +179,8 @@ pub(super) struct AnswerOption {
     pub label: String,
     pub description: Option<String>,
     pub keystroke: String,
+    /// When true, enter input mode after sending the keystroke so the user can type follow-up text.
+    pub enter_input_after: bool,
 }
 
 /// State for the answer selection popup.
