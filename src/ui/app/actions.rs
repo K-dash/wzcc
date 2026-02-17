@@ -636,8 +636,39 @@ impl App {
 
         match waiting {
             WaitingPrompt::PlanApproval => {
-                // Jump to pane immediately (user handles Shift+Tab for plan mode)
-                let _ = self.jump_to_selected();
+                self.answer_select_pending = Some(AnswerSelectState {
+                    pane_id,
+                    title: "Plan Approval (ExitPlanMode)".into(),
+                    prompt_kind: AnswerPromptKind::PlanApproval,
+                    options: vec![
+                        AnswerOption {
+                            label: "Yes, clear & bypass".into(),
+                            description: Some("Clear context and bypass permissions".into()),
+                            keystroke: "1".into(),
+                            enter_input_after: false,
+                        },
+                        AnswerOption {
+                            label: "Yes, bypass".into(),
+                            description: Some("Bypass permissions".into()),
+                            keystroke: "2".into(),
+                            enter_input_after: false,
+                        },
+                        AnswerOption {
+                            label: "Yes, approve edits".into(),
+                            description: Some("Manually approve edits".into()),
+                            keystroke: "3".into(),
+                            enter_input_after: false,
+                        },
+                        AnswerOption {
+                            label: "Tell Claude".into(),
+                            description: Some("Type feedback for Claude".into()),
+                            keystroke: "4".into(),
+                            enter_input_after: true,
+                        },
+                    ],
+                });
+                self.answer_select_state.select(Some(0));
+                self.dirty = true;
             }
             WaitingPrompt::Ask(ask_input) => {
                 let Some(question) = ask_input.questions.first() else {
@@ -660,6 +691,7 @@ impl App {
                         label: opt.label.clone(),
                         description: opt.description.clone(),
                         keystroke: (i + 1).to_string(),
+                        enter_input_after: false,
                     })
                     .collect();
 
@@ -671,6 +703,7 @@ impl App {
                 self.answer_select_pending = Some(AnswerSelectState {
                     pane_id,
                     title: question.question.clone(),
+                    prompt_kind: AnswerPromptKind::Ask,
                     options,
                 });
                 self.answer_select_state.select(Some(0));
@@ -681,21 +714,25 @@ impl App {
                 self.answer_select_pending = Some(AnswerSelectState {
                     pane_id,
                     title,
+                    prompt_kind: AnswerPromptKind::ToolPermission,
                     options: vec![
                         AnswerOption {
                             label: "Allow".into(),
                             description: Some("Allow this tool call".into()),
                             keystroke: "1".into(),
+                            enter_input_after: false,
                         },
                         AnswerOption {
                             label: "Always allow".into(),
                             description: Some("Allow all future calls of this tool".into()),
                             keystroke: "2".into(),
+                            enter_input_after: false,
                         },
                         AnswerOption {
                             label: "Reject".into(),
                             description: Some("Deny this tool call".into()),
                             keystroke: "3".into(),
+                            enter_input_after: false,
                         },
                     ],
                 });
@@ -707,34 +744,53 @@ impl App {
 
     /// Confirm the selected answer and send the keystroke to the pane.
     pub(super) fn confirm_answer_select(&mut self, index: usize) {
+        use crate::transcript::WaitingPrompt;
         if let Some(state) = self.answer_select_pending.take() {
             if let Some(option) = state.options.get(index) {
-                // Re-check that the session is still waiting
+                // Re-check that the session is still waiting and prompt type matches
                 let session_idx = self
                     .sessions
                     .iter()
                     .position(|s| s.pane.pane_id == state.pane_id);
-                let still_waiting =
-                    session_idx
-                        .and_then(|i| self.sessions.get(i))
-                        .is_some_and(|s| {
-                            matches!(
-                                s.status,
-                                crate::transcript::SessionStatus::WaitingForUser { .. }
+                let current_session = session_idx.and_then(|i| self.sessions.get(i));
+                let still_waiting = current_session.is_some_and(|s| {
+                    matches!(
+                        s.status,
+                        crate::transcript::SessionStatus::WaitingForUser { .. }
+                    )
+                });
+                let prompt_matches = current_session.is_some_and(|s| {
+                    matches!(
+                        (&s.waiting_prompt, state.prompt_kind),
+                        (
+                            Some(WaitingPrompt::PlanApproval),
+                            AnswerPromptKind::PlanApproval
+                        ) | (Some(WaitingPrompt::Ask(_)), AnswerPromptKind::Ask)
+                            | (
+                                Some(WaitingPrompt::ToolPermission { .. }),
+                                AnswerPromptKind::ToolPermission,
                             )
-                        });
+                    )
+                });
 
                 if !still_waiting {
                     self.toast = Some(Toast::error(
                         "Session is no longer waiting for input".into(),
                     ));
+                } else if !prompt_matches {
+                    self.toast = Some(Toast::error("Prompt type changed — please retry".into()));
                 } else {
                     match WeztermCli::send_keystroke(state.pane_id, &option.keystroke) {
                         Ok(()) => {
-                            self.toast = Some(Toast::success(format!(
-                                "Sent '{}' to Pane {}",
-                                option.label, state.pane_id
-                            )));
+                            if option.enter_input_after {
+                                // Enter i-mode so user can type follow-up text
+                                self.enter_input_mode();
+                            } else {
+                                self.toast = Some(Toast::success(format!(
+                                    "Sent '{}' to Pane {}",
+                                    option.label, state.pane_id
+                                )));
+                            }
                         }
                         Err(e) => {
                             self.toast = Some(Toast::error(format!("Failed to send: {}", e)));

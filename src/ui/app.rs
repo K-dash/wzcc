@@ -179,6 +179,18 @@ pub(super) struct AnswerOption {
     pub label: String,
     pub description: Option<String>,
     pub keystroke: String,
+    /// When true, enter input mode after sending the keystroke so the user can type follow-up text.
+    pub enter_input_after: bool,
+}
+
+/// Discriminant for the kind of waiting prompt that originated an answer selection.
+/// Used to re-validate that the session's prompt type hasn't changed between popup
+/// display and confirmation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AnswerPromptKind {
+    PlanApproval,
+    Ask,
+    ToolPermission,
 }
 
 /// State for the answer selection popup.
@@ -186,6 +198,8 @@ pub(super) struct AnswerSelectState {
     pub pane_id: u32,
     pub title: String,
     pub options: Vec<AnswerOption>,
+    /// The kind of waiting prompt this popup was created for.
+    pub prompt_kind: AnswerPromptKind,
 }
 
 impl Default for App {
@@ -763,5 +777,135 @@ mod tests {
         assert_eq!(sessions[0].pane.pane_id, 2);
         assert_eq!(sessions[1].pane.pane_id, 5);
         assert_eq!(sessions[2].pane.pane_id, 8);
+    }
+
+    // --- PlanApproval answer selection tests ---
+
+    use crate::transcript::WaitingPrompt;
+
+    fn make_waiting_session(pane_id: u32, waiting: WaitingPrompt) -> ClaudeSession {
+        let mut s = make_session(pane_id, "default", "/home/user/project");
+        s.status = SessionStatus::WaitingForUser {
+            tools: vec!["ExitPlanMode".to_string()],
+        };
+        s.waiting_prompt = Some(waiting);
+        s
+    }
+
+    #[test]
+    fn test_plan_approval_generates_four_options() {
+        let mut app = App::new();
+        app.sessions = vec![make_waiting_session(42, WaitingPrompt::PlanApproval)];
+        app.list_state.select(Some(0));
+
+        app.open_answer_select();
+
+        let state = app
+            .answer_select_pending
+            .as_ref()
+            .expect("popup should be set");
+        assert_eq!(state.prompt_kind, AnswerPromptKind::PlanApproval);
+        assert_eq!(state.options.len(), 4);
+        // Only option 4 should have enter_input_after
+        assert!(!state.options[0].enter_input_after);
+        assert!(!state.options[1].enter_input_after);
+        assert!(!state.options[2].enter_input_after);
+        assert!(state.options[3].enter_input_after);
+        assert_eq!(state.options[3].keystroke, "4");
+    }
+
+    #[test]
+    fn test_plan_approval_prompt_kind_mismatch_shows_error() {
+        let mut app = App::new();
+        // Session now has ToolPermission, but popup was created for PlanApproval
+        let mut s = make_session(42, "default", "/home/user/project");
+        s.status = SessionStatus::WaitingForUser {
+            tools: vec!["Bash".to_string()],
+        };
+        s.waiting_prompt = Some(WaitingPrompt::ToolPermission {
+            tool_names: vec!["Bash".to_string()],
+        });
+        app.sessions = vec![s];
+        app.list_state.select(Some(0));
+
+        // Manually set a PlanApproval popup (simulating stale state)
+        app.answer_select_pending = Some(AnswerSelectState {
+            pane_id: 42,
+            title: "Plan Approval".into(),
+            prompt_kind: AnswerPromptKind::PlanApproval,
+            options: vec![AnswerOption {
+                label: "Yes".into(),
+                description: None,
+                keystroke: "1".into(),
+                enter_input_after: false,
+            }],
+        });
+
+        app.confirm_answer_select(0);
+
+        // Should show error toast because prompt type changed
+        let toast = app.toast.as_ref().expect("toast should be set");
+        assert!(toast.message.contains("Prompt type changed"));
+    }
+
+    /// Helper: set up an App with a stale popup and a mismatched session, then confirm.
+    /// Returns the toast message (panics if no toast).
+    fn assert_prompt_mismatch(
+        session_prompt: WaitingPrompt,
+        popup_kind: AnswerPromptKind,
+    ) -> String {
+        let mut app = App::new();
+        let mut s = make_session(42, "default", "/home/user/project");
+        s.status = SessionStatus::WaitingForUser {
+            tools: vec!["dummy".to_string()],
+        };
+        s.waiting_prompt = Some(session_prompt);
+        app.sessions = vec![s];
+        app.list_state.select(Some(0));
+
+        app.answer_select_pending = Some(AnswerSelectState {
+            pane_id: 42,
+            title: "stale popup".into(),
+            prompt_kind: popup_kind,
+            options: vec![AnswerOption {
+                label: "X".into(),
+                description: None,
+                keystroke: "1".into(),
+                enter_input_after: false,
+            }],
+        });
+
+        app.confirm_answer_select(0);
+        app.toast.expect("toast should be set").message
+    }
+
+    #[test]
+    fn test_ask_popup_on_tool_permission_session_shows_error() {
+        let msg = assert_prompt_mismatch(
+            WaitingPrompt::ToolPermission {
+                tool_names: vec!["Bash".to_string()],
+            },
+            AnswerPromptKind::Ask,
+        );
+        assert!(msg.contains("Prompt type changed"));
+    }
+
+    #[test]
+    fn test_tool_permission_popup_on_ask_session_shows_error() {
+        use crate::transcript::AskUserQuestionInput;
+        let msg = assert_prompt_mismatch(
+            WaitingPrompt::Ask(AskUserQuestionInput { questions: vec![] }),
+            AnswerPromptKind::ToolPermission,
+        );
+        assert!(msg.contains("Prompt type changed"));
+    }
+
+    #[test]
+    fn test_tool_permission_popup_on_plan_approval_session_shows_error() {
+        let msg = assert_prompt_mismatch(
+            WaitingPrompt::PlanApproval,
+            AnswerPromptKind::ToolPermission,
+        );
+        assert!(msg.contains("Prompt type changed"));
     }
 }
