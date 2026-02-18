@@ -673,6 +673,7 @@ impl App {
                                 let index = (digit - 1) as usize;
                                 if index < self.sessions.len() {
                                     self.list_state.select(Some(index));
+                                    self.summary_scroll_offset = 0;
                                     self.exit_live_pane_view();
                                     self.dirty = true;
                                     // Also jump to the session
@@ -721,11 +722,13 @@ impl App {
                                     if is_double_click {
                                         // Double click -> jump
                                         self.list_state.select(Some(idx));
+                                        self.summary_scroll_offset = 0;
                                         let _ = self.jump_to_selected();
                                         self.last_click = None;
                                     } else {
                                         // Single click -> select
                                         self.list_state.select(Some(idx));
+                                        self.summary_scroll_offset = 0;
                                         self.dirty = true;
                                         self.last_click = Some((now, idx));
                                     }
