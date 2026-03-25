@@ -17,6 +17,7 @@ A TUI tool to list and navigate Claude Code sessions running in WezTerm tabs/pan
   ◆ <a href="#features">Features</a>
   ◆ <a href="#installation">Installation</a>
   ◆ <a href="#architecture">Architecture</a>
+  ◆ <a href="#accurate-status-for-long-running-auto-approved-tools">Hook Setup</a>
   ◆ <a href="docs/wezterm-tips.md">WezTerm Tips</a>
 </p>
 
@@ -260,9 +261,9 @@ wzcc reads Claude Code transcript files located in `~/.claude/projects/{encoded-
 
 | Status | Condition |
 |--------|-----------|
-| `Processing` | Last entry is progress event, tool_result from user, user input (Claude responding), or recent tool_use invocation (<10 seconds) |
+| `Processing` | Last entry is progress event, tool_result from user, user input (Claude responding), or recent tool_use invocation (<10 seconds). Also shown when a hook reports `active` and overrides a stale `Waiting` signal. |
 | `Idle` | Last entry is assistant response, end_turn marker, turn_duration, or stop_hook_summary |
-| `Waiting` | Tool use pending user approval (>10 seconds elapsed) |
+| `Waiting` | Tool use pending user approval (>10 seconds elapsed since last transcript entry). Can produce false positives for auto-approved tools — see [Accurate status for long-running auto-approved tools](#accurate-status-for-long-running-auto-approved-tools). |
 | `Ready` | Fresh session with no meaningful entries yet |
 | `Unknown` | Transcript parsing failed, status cannot be determined, or statusLine bridge is stale |
 
@@ -337,6 +338,91 @@ wzcc uninstall-bridge
 - Session status detection still works but may show wrong data for multi-CWD sessions
 - A message prompts you to run `wzcc install-bridge`
 - Individual pane IDs remain accurate
+
+### Accurate Status for Long-Running Auto-Approved Tools
+
+When a tool is auto-approved and runs for more than 10 seconds, wzcc can incorrectly show the session as **Waiting** instead of **Processing**. This happens because the transcript heuristic cannot distinguish "waiting for the user to approve a tool" from "an approved tool is executing" — both look like a `tool_use` entry with no follow-up.
+
+**Solution: install Claude Code hooks that report session status**
+
+wzcc's statusLine bridge includes a hook status slot. When Claude Code hooks write an `active` signal to `/tmp/claude-status-msg-{WEZTERM_PANE}`, the bridge reads it and wzcc overrides the transcript-based `Waiting` with `Processing`.
+
+This is **opt-in and backward compatible** — without the hooks the transcript heuristic applies unchanged.
+
+#### Status file format
+
+The bridge reads a file at `/tmp/claude-status-msg-{WEZTERM_PANE}` with this structure:
+
+```
+{unix_timestamp_ms}
+waiting|active
+{optional last-message text}
+```
+
+Only line 2 (`waiting` or `active`) is used for the status override.
+
+#### Reference hook script
+
+Save the following as `~/.claude/hooks/claude-status.sh` and make it executable (`chmod +x`):
+
+```bash
+#!/bin/bash
+# Write Claude Code session status for wzcc bridge to read.
+# Only runs inside WezTerm (guards on WEZTERM_PANE).
+
+PANE_ID="${WEZTERM_PANE}"
+[[ -z "$PANE_ID" ]] && exit 0
+
+STATUS_FILE="/tmp/claude-status-msg-${PANE_ID}"
+EVENT="${1}"  # "stop" or "prompt"
+
+if [[ "$EVENT" == "stop" ]]; then
+  # Claude has stopped — session is now waiting for user input
+  printf '%s\nwaiting\n' "$(date +%s%3N)" > "$STATUS_FILE"
+elif [[ "$EVENT" == "prompt" ]]; then
+  # User submitted a prompt — session is now active
+  EXISTING_MSG=""
+  [[ -f "$STATUS_FILE" ]] && EXISTING_MSG=$(sed -n '3p' "$STATUS_FILE")
+  printf '%s\nactive\n%s\n' "$(date +%s%3N)" "$EXISTING_MSG" > "$STATUS_FILE"
+fi
+```
+
+#### Registering the hooks in Claude Code
+
+Add the following to `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/claude-status.sh stop"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/claude-status.sh prompt"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+After saving `settings.json`, restart your Claude Code sessions for the hooks to take effect.
+
+> **Note:** The hook script exits silently when `WEZTERM_PANE` is not set, so it is safe to install globally — it has no effect outside WezTerm.
 
 ### Platform Support
 
