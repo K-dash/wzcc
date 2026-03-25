@@ -28,11 +28,22 @@ SESSION_ID=$(echo "$input" | jq -r '.session_id // empty')
 TRANSCRIPT_PATH=$(echo "$input" | jq -r '.transcript_path // empty')
 CWD=$(echo "$input" | jq -r '.cwd // empty')
 
+# Read hook-reported status so wzcc can override transcript-based WaitingForUser
+# detection. When a tool is auto-approved and running for >10s the transcript
+# heuristic incorrectly shows "Waiting"; the hook writes "active" in that case.
+HOOK_STATUS=""
+if [[ -n "$WEZTERM_PANE" ]]; then
+    STATUS_FILE="/tmp/claude-status-msg-$WEZTERM_PANE"
+    if [[ -f "$STATUS_FILE" ]]; then
+        HOOK_STATUS=$(sed -n '2p' "$STATUS_FILE")
+    fi
+fi
+
 # Only write if we have valid session info and TTY
 if [[ -n "$SESSION_ID" && -n "$TTY" ]]; then
     mkdir -p ~/.claude/wzcc/sessions
     cat > ~/.claude/wzcc/sessions/${TTY}.json << EOF
-{"session_id":"$SESSION_ID","transcript_path":"$TRANSCRIPT_PATH","cwd":"$CWD","tty":"$TTY","updated_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
+{"session_id":"$SESSION_ID","transcript_path":"$TRANSCRIPT_PATH","cwd":"$CWD","tty":"$TTY","updated_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","status":"$HOOK_STATUS"}
 EOF
 fi
 
@@ -104,9 +115,26 @@ pub fn install_bridge() -> Result<()> {
         .and_then(|c| c.as_str())
         .map(|s| s.to_string());
 
-    // Don't chain to ourselves if we're already installed
+    // Don't chain to ourselves if we're already installed.
+    // When reinstalling, extract the ORIGINAL_STATUSLINE from the existing bridge
+    // file so the chain to the user's statusLine command is preserved.
     let original_command = match &existing_command {
-        Some(cmd) if cmd.contains("wzcc_statusline_bridge") => None,
+        Some(cmd) if cmd.contains("wzcc_statusline_bridge") => {
+            // Extract the existing chain from the installed bridge script
+            bridge_path.exists().then(|| {
+                fs::read_to_string(&bridge_path).ok().and_then(|content| {
+                    content.lines().find_map(|line| {
+                        let value = line.strip_prefix("ORIGINAL_STATUSLINE=")?;
+                        let value = value.trim_matches('"');
+                        if value.is_empty() || value.contains("{{ORIGINAL_STATUSLINE}}") {
+                            None
+                        } else {
+                            Some(value.to_string())
+                        }
+                    })
+                })
+            }).flatten()
+        }
         other => other.clone(),
     };
 
